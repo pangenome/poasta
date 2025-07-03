@@ -131,6 +131,11 @@ struct AlignArgs {
     #[arg(short = 'e', default_value = "2")]
     #[clap(help_heading = "Alignment configuration")]
     cost_gap_extend: Option<String>,
+
+    /// Output alignment scores to stderr
+    #[arg(long)]
+    #[clap(help_heading = "Alignment configuration")]
+    show_scores: bool,
 }
 
 #[derive(Args, Debug)]
@@ -158,6 +163,7 @@ fn perform_alignment<N, C>(
     aligner: &mut PoastaAligner<C>,
     debug_writer: Option<&DebugOutputWriter>,
     sequences_fname: &Path,
+    show_scores: bool,
 ) -> Result<()>
 where
     N: IndexType + DeserializeOwned,
@@ -204,16 +210,11 @@ where
             // eprintln!("Creating initial graph from {}...", record.name());
             graph.add_alignment_with_weights(seq_name, record.sequence().as_ref(), None, &weights)?;
         } else {
-            // eprint!("Aligning #{i} {}... ", seq_name);
             let result = aligner.align::<u32, _>(graph, record.sequence().as_ref());
-            // eprintln!("Done. Alignment Score: {:?}", result.score);
-            // eprintln!();
-            // eprintln!(
-            //     "{}",
-            //     print_alignment(graph, record.sequence().as_ref(), &result.alignment)
-            // );
-            // eprintln!();
-            // eprintln!();
+            
+            if show_scores {
+                eprintln!("Sequence: {}, Alignment Score: {:?}", seq_name, result.score);
+            }
 
             graph.add_alignment_with_weights(
                 seq_name,
@@ -266,7 +267,7 @@ fn validate_and_expand_gap_open_costs(open_costs: Vec<u8>, extend_costs: &[u8]) 
 
 fn generate_default_breakpoints(num_pieces: usize) -> Vec<usize> {
     match num_pieces {
-        2 => vec![10],           // Two-piece: short (1-10), long (11+)
+        2 => vec![3],            // Two-piece: short (1-3), long (4+)
         3 => vec![5, 20],        // Three-piece: short (1-5), medium (6-20), long (21+)
         4 => vec![3, 10, 30],    // Four-piece: very short, short, medium, long
         _ => {
@@ -315,6 +316,7 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
     // Create aligner with appropriate scoring model based on extension costs
     if extend_costs.len() == 1 {
         // Standard affine gap penalty (single extension cost)
+        eprintln!("DEBUG: Using standard affine gap penalty with extend={}, open={}", extend_costs[0], expanded_open_costs[0]);
         let scoring = GapAffine::new(
             align_args.cost_mismatch.unwrap_or(4),
             extend_costs[0],
@@ -333,29 +335,34 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::U16(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::U32(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
         }
     } else {
         // Multi-piece gap penalty (multiple extension costs)
         let breakpoints = generate_default_breakpoints(extend_costs.len());
+        eprintln!("DEBUG: Using multi-piece gap penalty with extend={:?}, open={:?}, breakpoints={:?}", extend_costs, expanded_open_costs, breakpoints);
 
         let scoring = GapMultiPieceAffine::new(
             align_args.cost_mismatch.unwrap_or(4),
@@ -377,24 +384,28 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::U16(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::U32(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
             POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
                 g,
                 &mut aligner,
                 debug_writer.as_ref(),
                 align_args.sequences.as_ref(),
+                align_args.show_scores,
             )?,
         }
     }
