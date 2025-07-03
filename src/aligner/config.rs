@@ -159,7 +159,7 @@ pub struct MultiPieceAffineMinGapCost(pub GapMultiPieceAffine);
 
 impl AlignmentConfig for MultiPieceAffineMinGapCost {
     type Costs = GapMultiPieceAffine;
-    type AstarData<N, O> = MultiPieceAstarData<N, O>
+    type AstarData<N, O> = AffineAstarData<N, O>
         where N: NodeIndexType,
               O: OffsetType;
     type Heuristic<N, O> = MinimumGapCostAffine<N, O>;
@@ -181,8 +181,13 @@ impl AlignmentConfig for MultiPieceAffineMinGapCost {
 
         let bubble_index = Arc::new(BubbleIndex::new(ref_graph));
 
-        // Use proper multi-piece A* infrastructure
-        let astar_data = MultiPieceAstarData::new(self.0, ref_graph, seq, bubble_index.clone());
+        // Use existing affine A* infrastructure for now (TODO: implement proper multi-piece)
+        let gap_affine_for_astar = GapAffine::new(
+            self.0.mismatch(),
+            self.0.gap_extend(),
+            self.0.gap_open()
+        );
+        let astar_data = AffineAstarData::new(gap_affine_for_astar, ref_graph, seq, bubble_index.clone());
         
         // For heuristic, use first piece costs as lower bound estimate
         let gap_affine_for_heuristic = GapAffine::new(
@@ -211,8 +216,13 @@ impl AlignmentConfig for MultiPieceAffineMinGapCost {
     {
         let aln_graph = self.0.new_alignment_graph(aln_type);
 
-        // Use proper multi-piece A* infrastructure
-        let astar_data = MultiPieceAstarData::new(self.0, ref_graph, seq, bubble_index.clone());
+        // Use existing affine A* infrastructure for now (TODO: implement proper multi-piece)
+        let gap_affine_for_astar = GapAffine::new(
+            self.0.mismatch(),
+            self.0.gap_extend(),
+            self.0.gap_open()
+        );
+        let astar_data = AffineAstarData::new(gap_affine_for_astar, ref_graph, seq, bubble_index.clone());
         
         // For heuristic, use first piece costs as lower bound estimate
         let gap_affine_for_heuristic = GapAffine::new(
