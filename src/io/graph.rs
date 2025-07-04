@@ -87,9 +87,10 @@ pub fn load_graph_from_fasta_msa(path: impl AsRef<Path>) -> Result<POAGraphWithI
                 graph.add_edge(prev, node_ix, seq_id, 2);
             } else {
                 // First node of this sequence
-                graph
-                    .sequences
-                    .push(Sequence(std::str::from_utf8(seq.name()).unwrap().to_string(), node_ix));
+                let name = std::str::from_utf8(seq.name())
+                    .map_err(|_| PoastaError::Other)?
+                    .to_string();
+                graph.sequences.push(Sequence(name, node_ix));
             }
 
             prev_node = Some(node_ix);
@@ -158,7 +159,9 @@ where
                     GfaLine::Segment(segment) => {
                         if let Some(seq) = segment.sequence {
                             let weights = vec![1; seq.len()];
-                            let (start, end) = graph.add_nodes_for_sequence(seq.as_bytes(), &weights, 0, seq.len()).unwrap();                        
+                            let (start, end) = graph
+                                .add_nodes_for_sequence(seq.as_bytes(), &weights, 0, seq.len())
+                                .ok_or(PoastaError::GraphError)?;
                             
                             name_to_ix.insert(segment.sid.clone(), graph_segments.names.len());
                             graph_segments.names.push(segment.sid.clone());
@@ -178,17 +181,15 @@ where
                         
                         let from_ix = name_to_ix.get(&link.sid1);
                         let to_ix = name_to_ix.get(&link.sid2);
-                        
-                        // No corresponding segment yet, maybe later after parsing the entire file?
-                        if from_ix.is_none() || to_ix.is_none() {
+
+                        if let (Some(&from_ix), Some(&to_ix)) = (from_ix, to_ix) {
+                            let from = graph_segments.end_nodes[from_ix];
+                            let to = graph_segments.start_nodes[to_ix];
+
+                            graph.add_edge(from, to, 0, 1);
+                        } else {
                             links_to_add.push(link);
-                            continue;
                         }
-                        
-                        let from = graph_segments.end_nodes[*from_ix.unwrap()];
-                        let to = graph_segments.start_nodes[*to_ix.unwrap()];
-                        
-                        graph.add_edge(from, to, 0, 1);
                     },
                     _ => (),
                 }
@@ -203,16 +204,21 @@ where
     for link in links_to_add {
         let from_ix = name_to_ix.get(&link.sid1);
         let to_ix = name_to_ix.get(&link.sid2);
-        
-        if from_ix.is_none() || to_ix.is_none() {
-            eprintln!("Omitting link {} -> {} since at least one segment ID does not exists.", link.sid1, link.sid2);
-            continue;
+
+        match (from_ix, to_ix) {
+            (Some(&from_ix), Some(&to_ix)) => {
+                let from = graph_segments.end_nodes[from_ix];
+                let to = graph_segments.start_nodes[to_ix];
+
+                graph.add_edge(from, to, 0, 1);
+            }
+            _ => {
+                eprintln!(
+                    "Omitting link {} -> {} since at least one segment ID does not exists.",
+                    link.sid1, link.sid2
+                );
+            }
         }
-        
-        let from = graph_segments.end_nodes[*from_ix.unwrap()];
-        let to = graph_segments.start_nodes[*to_ix.unwrap()];
-        
-        graph.add_edge(from, to, 0, 1);
     }
     
     graph.post_process()?;
@@ -270,7 +276,10 @@ where
             node_to_segment.insert(front, (curr_segment_id, seg_pos));
             segment_starts.insert(front, curr_segment_id);
             while curr_out_degree == 1 {
-                let next_node = graph.successors(curr_node).next().unwrap();
+                let next_node = graph
+                    .successors(curr_node)
+                    .next()
+                    .ok_or(PoastaError::GraphError)?;
                 let in_degree_next = graph.in_degree(next_node);
 
                 if in_degree_next == 1 && next_node != graph.end_node() {
