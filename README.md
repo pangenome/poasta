@@ -177,6 +177,33 @@ poasta align -m ends-free sequences.fasta
 
 Note: Currently, `ends-free` and `semi-global` modes are only supported with `global` alignment.
 
+## Aligning sequences with `lasagna`
+
+`lasagna` aligns reads to an existing POA graph described in GFA format and
+emits the resulting alignments as GAF records.
+
+```bash
+lasagna align graph.gfa reads.fq.gz > alignments.gaf
+```
+
+### Arguments
+
+- `graph` – the input GFA graph (must be acyclic)
+- `sequences` – FASTA/FASTQ reads to align (gzip supported)
+- `-j`, `--num-threads` – number of worker threads
+- `-o` – output filename (stdout if omitted)
+- `-O` – output format, currently only `gaf`
+- `-m` – alignment span (`global`, `semi-global`, `ends-free`)
+- `-n` – mismatch penalty
+- `-g` – gap open penalty
+- `-e` – gap extend penalty
+
+### How it differs from `poasta`
+
+While `poasta` builds and updates partial order graphs from input sequences and
+can convert them between several formats, `lasagna` does not modify the graph.
+Instead it maps sequences onto a given GFA graph and outputs the alignments in
+GAF without producing a POASTA graph file.
 
 ## Related repositories
 
