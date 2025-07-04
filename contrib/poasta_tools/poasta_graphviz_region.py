@@ -24,6 +24,15 @@ def parse_seq_meta(seq_bytes: bytes) -> tuple[str, str]:
 
 
 def parse_poasta_graphviz(file: BinaryIO):
+    """Parse GraphViz graph from POASTA DOT data.
+
+    Args:
+        file: Binary file handle pointing to a POASTA graph.
+
+    Returns:
+        Tuple of the parsed graph and sequence meta information.
+    """
+
     seq_names_line = file.readline()
     seq_names = seq_names_line.replace(b"# seq:\t", b"").split(b"\t")
 
@@ -38,6 +47,16 @@ def parse_poasta_graphviz(file: BinaryIO):
 
 
 def contains(list_to_search: list, value) -> bool:
+    """Check if sorted list contains a value using binary search.
+
+    Args:
+        list_to_search: Sorted list to search.
+        value: Value to look for.
+
+    Returns:
+        True if value is present, else False.
+    """
+
     i = bisect_left(list_to_search, value)
 
     if i != len(list_to_search) and list_to_search[i] == value:
@@ -47,6 +66,12 @@ def contains(list_to_search: list, value) -> bool:
 
 
 def main():
+    """Command line interface for subgraph visualization.
+
+    Parses arguments, extracts a region from the graph and prints the
+    subgraph in DOT format.
+    """
+
     parser = argparse.ArgumentParser(
         description="Create visualizations for a subgraph of the POA graph."
     )
