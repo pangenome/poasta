@@ -149,6 +149,38 @@ poasta view -Ogfa existing_msa.poasta > poa_graph.gfa
 # Convert to FASTA MSA
 poasta view -Ofasta existing_msa.poasta > poa_msa.fasta
 ```
+### Inspecting POA graphs
+
+Use `poasta stats` to print statistics for a stored graph. The command
+reports fields such as `node_count`, `node_count_with_start`,
+`edge_count`, `avg_in_degree`, and `avg_out_degree`.
+
+```bash
+poasta stats graph.poasta 2> stats.log
+```
+Example output:
+
+```
+node_count: 124
+node_count_with_start: 126
+edge_count: 210
+avg_in_degree: 1.65
+avg_out_degree: 1.65
+```
+
+The `contrib/poasta_tools` directory includes plotting tools.
+Run `poasta_plot.py` to visualize dynamic programming matrices:
+
+```bash
+python contrib/poasta_tools/poasta_plot.py matrix.tsv graph.dot
+```
+
+Use `poasta_graphviz_region.py` to render a subgraph:
+
+```bash
+python contrib/poasta_tools/poasta_graphviz_region.py \
+    graph.dot chr1:1000-2000
+```
 
 ## Gap penalty configuration
 
