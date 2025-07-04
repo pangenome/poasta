@@ -19,7 +19,7 @@ jobs:
       - name: Generate coverage
         uses: actions-rs/tarpaulin@v0.1
         with:
-          version: "0.26.0"
+          version: "v0.26.0"
           args: --out Xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
