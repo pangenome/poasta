@@ -14,11 +14,27 @@ between the query and the graph, greatly speeding up the alignment process.
 
 ### Pre-built binaries
 
-TODO
+Pre-built executables for Linux and macOS are available from the
+[GitHub releases page](https://github.com/broadinstitute/poasta/releases).
+Download the archive that matches your platform and unpack it:
+
+```bash
+tar -xzf poasta-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+sudo mv poasta /usr/local/bin/
+```
+Replace `X.Y.Z` with the release number you wish to install. The binary can
+then be used directly from the command line.
 
 ### Conda
 
-TODO
+POASTA is packaged for bioconda. You can install it using `conda` or
+`mamba` as follows:
+
+```bash
+conda install -c conda-forge -c bioconda poasta
+```
+This will fetch a pre-built binary suitable for your environment and add it
+to your active conda environment's path.
 
 ### Building POASTA from source
 
