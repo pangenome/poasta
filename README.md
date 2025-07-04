@@ -225,3 +225,16 @@ GAF without producing a POASTA graph file.
 
 * [poa-bench](https://github.com/broadinstitute/poa-bench) - Benchmark POASTA against other POA tools
 * [spoa-rs](https://github.com/broadinstitute/spoa-rs) - Rust bindings to SPOA
+
+## Contributing
+
+Run the test suites to ensure everything works as expected.
+
+```bash
+cargo test
+pytest tests/python_tools
+```
+
+Both suites should pass. Set the `SEED` environment variable to force
+deterministic behavior. If you measure coverage, tools such as
+`cargo tarpaulin` or `pytest --cov` are recommended.
