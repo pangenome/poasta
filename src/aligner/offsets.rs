@@ -102,3 +102,31 @@ impl OffsetType for u64 {
         *self + Self::one()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OffsetType;
+
+    fn check_offset<T: OffsetType + PartialEq + From<u8>>(value: u8) {
+        let off: T = <T as OffsetType>::new(value as usize);
+        assert_eq!(off, T::from(value));
+        assert_eq!(off.as_usize(), value as usize);
+        assert_eq!(off.as_isize(), value as isize);
+        assert_eq!(off.increase_one(), T::from(value + 1));
+    }
+
+    #[test]
+    fn u8_offsets() {
+        check_offset::<u8>(8);
+    }
+
+    #[test]
+    fn u16_offsets() {
+        check_offset::<u16>(16);
+    }
+
+    #[test]
+    fn u32_offsets() {
+        check_offset::<u32>(32);
+    }
+}
