@@ -221,6 +221,21 @@ can convert them between several formats, `lasagna` does not modify the graph.
 Instead it maps sequences onto a given GFA graph and outputs the alignments in
 GAF without producing a POASTA graph file.
 
+## Python visualization helpers
+
+The `contrib/poasta_tools` directory provides small utilities for
+inspecting alignment results. `poasta_plot.py` can plot the aligner
+state over time while `poasta_graphviz_region.py` extracts and
+visualizes subgraphs from a POA graph.
+
+```bash
+python contrib/poasta_tools/poasta_plot.py --help
+python contrib/poasta_tools/poasta_graphviz_region.py --help
+```
+
+These tools depend on `numpy`, `pandas`, `matplotlib`, `networkx`, and
+`pygraphviz`.
+
 ## Related repositories
 
 * [poa-bench](https://github.com/broadinstitute/poa-bench) - Benchmark POASTA against other POA tools
