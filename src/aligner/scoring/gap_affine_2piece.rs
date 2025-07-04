@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use crate::aligner::{AlignedPair, Alignment};
 
 use crate::graphs::{AlignableRefGraph, NodeIndexType};
@@ -141,6 +141,35 @@ impl Affine2PieceAlignmentGraph {
     }
 }
 
+fn dist_to_end<G: AlignableRefGraph>(
+    graph: &G,
+    start: G::NodeIndex,
+    max: usize,
+) -> Option<usize> {
+    let mut queue: VecDeque<(G::NodeIndex, usize)> = VecDeque::new();
+    let mut visited: FxHashSet<G::NodeIndex> = FxHashSet::default();
+    queue.push_back((start, 0));
+    visited.insert(start);
+
+    while let Some((n, dist)) = queue.pop_front() {
+        if n == graph.end_node() {
+            return Some(dist);
+        }
+
+        if dist >= max {
+            continue;
+        }
+
+        for succ in graph.successors(n) {
+            if visited.insert(succ) {
+                queue.push_back((succ, dist + 1));
+            }
+        }
+    }
+
+    None
+}
+
 impl AlignmentGraph for Affine2PieceAlignmentGraph {
     type CostModel = GapAffine2Piece;
 
@@ -237,10 +266,17 @@ impl AlignmentGraph for Affine2PieceAlignmentGraph {
                         // This allows skipping reference suffix without penalty
                         true
                     },
-                    Bound::Included(_) | Bound::Excluded(_) => {
-                        // For bounded free ends, still require reaching graph end for now
-                        // TODO: Implement proper graph distance calculation
-                        node.node() == ref_graph.end_node()
+                    Bound::Included(max_free) => {
+                        match dist_to_end(ref_graph, node.node(), max_free) {
+                            Some(d) => d <= max_free,
+                            None => false,
+                        }
+                    },
+                    Bound::Excluded(max_free) => {
+                        match dist_to_end(ref_graph, node.node(), max_free.saturating_sub(1)) {
+                            Some(d) => d < max_free,
+                            None => false,
+                        }
                     }
                 };
                 
@@ -1669,5 +1705,26 @@ mod tests {
         // Should work with valid parameters
         let result = aligner_valid.align::<u16, _>(&graph, query);
         assert!(matches!(result.score, Score::Score(_)));
+    }
+
+    #[test]
+    fn test_graph_end_distance_two_piece() {
+        use std::ops::Bound;
+        use petgraph::graph::NodeIndex;
+
+        let graph = crate::graphs::mock::create_test_graph1();
+        let costs = GapAffine2Piece::new(1, 2, 8, 1, 6);
+        let aln_graph = Affine2PieceAlignmentGraph::new(&costs, AlignmentType::EndsFree {
+            qry_free_begin: Bound::Unbounded,
+            qry_free_end: Bound::Unbounded,
+            graph_free_begin: Bound::Unbounded,
+            graph_free_end: Bound::Included(2),
+        });
+
+        let near_end = AlignmentGraphNode::new(NodeIndex::new(4usize), 0u32);
+        assert!(aln_graph.is_end(&graph, b"", &near_end, AlignState::Match));
+
+        let far = AlignmentGraphNode::new(NodeIndex::new(2usize), 0u32);
+        assert!(!aln_graph.is_end(&graph, b"", &far, AlignState::Match));
     }
 }

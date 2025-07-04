@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use crate::aligner::{AlignedPair, Alignment};
 
 use crate::graphs::{AlignableRefGraph, NodeIndexType};
@@ -86,6 +86,35 @@ pub struct AffineAlignmentGraph {
 
     /// Alignment type, e.g., global alignment or ends-free alignment
     aln_type: AlignmentType,
+}
+
+fn dist_to_end<G: AlignableRefGraph>(
+    graph: &G,
+    start: G::NodeIndex,
+    max: usize,
+) -> Option<usize> {
+    let mut queue: VecDeque<(G::NodeIndex, usize)> = VecDeque::new();
+    let mut visited: FxHashSet<G::NodeIndex> = FxHashSet::default();
+    queue.push_back((start, 0));
+    visited.insert(start);
+
+    while let Some((n, dist)) = queue.pop_front() {
+        if n == graph.end_node() {
+            return Some(dist);
+        }
+
+        if dist >= max {
+            continue;
+        }
+
+        for succ in graph.successors(n) {
+            if visited.insert(succ) {
+                queue.push_back((succ, dist + 1));
+            }
+        }
+    }
+
+    None
 }
 
 impl AffineAlignmentGraph {
@@ -192,10 +221,17 @@ impl AlignmentGraph for AffineAlignmentGraph {
                         // Free graph ending: we can end anywhere, but A* will find the optimal path
                         true
                     },
-                    Bound::Included(_) | Bound::Excluded(_) => {
-                        // For bounded free ends, still require reaching graph end for now
-                        // TODO: Implement proper graph distance calculation
-                        node.node() == ref_graph.end_node()
+                    Bound::Included(max_free) => {
+                        match dist_to_end(ref_graph, node.node(), max_free) {
+                            Some(d) => d <= max_free,
+                            None => false,
+                        }
+                    },
+                    Bound::Excluded(max_free) => {
+                        match dist_to_end(ref_graph, node.node(), max_free.saturating_sub(1)) {
+                            Some(d) => d < max_free,
+                            None => false,
+                        }
                     }
                 };
                 
@@ -1303,7 +1339,7 @@ mod tests {
         
         for query in &single_nucs {
             let result = aligner.align::<u16, _>(&graph, *query);
-            assert!(matches!(result.score, Score::Score(_)), 
+            assert!(matches!(result.score, Score::Score(_)),
                     "Failed to align {:?}", std::str::from_utf8(*query).unwrap());
             
             let score = u32::from(result.score);
@@ -1314,5 +1350,47 @@ mod tests {
             }
             assert_eq!(score, 0, "Single nucleotide match should have score 0, got {}", score);
         }
+    }
+
+    #[test]
+    fn test_graph_end_distance_included() {
+        use std::ops::Bound;
+        use petgraph::graph::NodeIndex;
+
+        let graph = crate::graphs::mock::create_test_graph1();
+        let costs = GapAffine::new(1, 1, 1);
+        let aln_graph = AffineAlignmentGraph::new(&costs, AlignmentType::EndsFree {
+            qry_free_begin: Bound::Unbounded,
+            qry_free_end: Bound::Unbounded,
+            graph_free_begin: Bound::Unbounded,
+            graph_free_end: Bound::Included(3),
+        });
+
+        let node = AlignmentGraphNode::new(NodeIndex::new(3usize), 0u32);
+        assert!(aln_graph.is_end(&graph, b"", &node, AlignState::Match));
+
+        let node_far = AlignmentGraphNode::new(NodeIndex::new(2usize), 0u32);
+        assert!(!aln_graph.is_end(&graph, b"", &node_far, AlignState::Match));
+    }
+
+    #[test]
+    fn test_graph_end_distance_excluded() {
+        use std::ops::Bound;
+        use petgraph::graph::NodeIndex;
+
+        let graph = crate::graphs::mock::create_test_graph1();
+        let costs = GapAffine::new(1, 1, 1);
+        let aln_graph = AffineAlignmentGraph::new(&costs, AlignmentType::EndsFree {
+            qry_free_begin: Bound::Unbounded,
+            qry_free_end: Bound::Unbounded,
+            graph_free_begin: Bound::Unbounded,
+            graph_free_end: Bound::Excluded(3),
+        });
+
+        let node_ok = AlignmentGraphNode::new(NodeIndex::new(4usize), 0u32);
+        assert!(aln_graph.is_end(&graph, b"", &node_ok, AlignState::Match));
+
+        let node_equal = AlignmentGraphNode::new(NodeIndex::new(3usize), 0u32);
+        assert!(!aln_graph.is_end(&graph, b"", &node_equal, AlignState::Match));
     }
 }
