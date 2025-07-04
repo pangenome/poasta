@@ -498,3 +498,63 @@ impl Display for POAGraphWithIx {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aligner::alignment::AlignedPair;
+
+    #[test]
+    fn test_new_graph_is_empty() {
+        let graph = POAGraph::<u32>::new();
+
+        assert!(graph.is_empty(), "graph should have no sequence nodes");
+        assert_eq!(graph.node_count(), 0);
+        assert_eq!(graph.node_count_with_start_and_end(), 2);
+        assert_eq!(graph.edge_count(), 0);
+        assert!(graph.sequences.is_empty());
+    }
+
+    #[test]
+    fn test_add_alignment_with_weights_basic() {
+        let mut graph = POAGraph::<u32>::new();
+
+        let seq = b"ACG";
+        let weights = vec![1usize; seq.len()];
+        graph
+            .add_alignment_with_weights("seq1", seq, None, &weights)
+            .unwrap();
+
+        assert!(!graph.is_empty());
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(graph.sequences.len(), 1);
+
+        let seq_nodes: Vec<_> = graph
+            .topological_sorted
+            .iter()
+            .cloned()
+            .filter(|n| *n != graph.start_node && *n != graph.end_node)
+            .collect();
+        assert_eq!(seq_nodes.len(), 3);
+        assert_eq!(graph.get_symbol(seq_nodes[0]), b'A');
+        assert_eq!(graph.get_symbol(seq_nodes[1]), b'C');
+        assert_eq!(graph.get_symbol(seq_nodes[2]), b'G');
+        assert_eq!(graph.topological_sorted.first(), Some(&graph.start_node));
+        assert_eq!(graph.topological_sorted.last(), Some(&graph.end_node));
+
+        // Add the same sequence again but aligned to existing nodes
+        let alignment = vec![
+            AlignedPair::new(Some(seq_nodes[0]), Some(0)),
+            AlignedPair::new(Some(seq_nodes[1]), Some(1)),
+            AlignedPair::new(Some(seq_nodes[2]), Some(2)),
+        ];
+        graph
+            .add_alignment_with_weights("seq2", seq, Some(&alignment), &weights)
+            .unwrap();
+
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(graph.sequences.len(), 2);
+    }
+}
