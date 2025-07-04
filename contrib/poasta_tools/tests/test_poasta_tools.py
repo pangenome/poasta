@@ -1,4 +1,3 @@
-import importlib
 import io
 import sys
 import types
@@ -7,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import pytest
+import pytest  # noqa: E402
 
 
 class DummyAGraph:
@@ -62,7 +61,11 @@ def make_dummy_networkx():
                     return self.parent._nodes[n]
 
                 def __call__(self, data=False):
-                    return list(self.parent._nodes.items()) if data else list(self.parent._nodes)
+                    return (
+                        list(self.parent._nodes.items())
+                        if data
+                        else list(self.parent._nodes)
+                    )
 
             self.nodes = NodeView(self)
 
@@ -177,11 +180,38 @@ def test_parse_poasta_graphviz(monkeypatch):
     assert meta == {'ref': (0, 'Node0\n')}
 
 
+def test_parse_poasta_graphviz_multiple_sequences(monkeypatch):
+    dummy_pg = types.ModuleType('pygraphviz')
+    dummy_pg.AGraph = DummyAGraph
+    monkeypatch.setitem(sys.modules, 'pygraphviz', dummy_pg)
+
+    import contrib.poasta_tools.poasta_graphviz_region as pgr
+
+    dot = (
+        b"# seq:\tref:Node0\talt:Node2\n"
+        b"digraph {\n  Node0 -> Node1;\n  Node1 -> Node2;\n}"
+    )
+    g, meta = pgr.parse_poasta_graphviz(io.BytesIO(dot))
+    assert isinstance(g, DummyAGraph)
+    assert g.dot == "digraph {\n  Node0 -> Node1;\n  Node1 -> Node2;\n}"
+    assert meta == {'ref': (0, 'Node0'), 'alt': (1, 'Node2\n')}
+
+
 def test_contains():
     from contrib.poasta_tools import poasta_graphviz_region as pgr
 
     assert pgr.contains([1, 3, 5], 3) is True
     assert pgr.contains([1, 3, 5], 2) is False
+
+
+def test_contains_boundaries():
+    from contrib.poasta_tools import poasta_graphviz_region as pgr
+
+    ordered = [1, 2, 3, 4]
+    assert pgr.contains(ordered, 1) is True
+    assert pgr.contains(ordered, 4) is True
+    assert pgr.contains(ordered, 0) is False
+    assert pgr.contains(ordered, 5) is False
 
 
 def test_load_spoa_matrix(tmp_path, monkeypatch):
@@ -263,4 +293,3 @@ def test_load_graph_and_helpers(tmp_path, monkeypatch):
 
     lines = pp.poa_matrix_discontinuieties(g)
     assert lines == []
-
