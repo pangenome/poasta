@@ -71,6 +71,51 @@ pub struct GAFRecord {
     pub additional_fields: Vec<Field>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphs::poa::POAGraph;
+    use crate::graphs::AlignableRefGraph;
+
+    #[test]
+    fn resolve_returns_segment_index_and_position() {
+        let mut graph = POAGraph::<u32>::new();
+
+        let weights = vec![1; 2];
+        let (s1_start, s1_end) = graph
+            .add_nodes_for_sequence(b"AC", &weights, 0, 2)
+            .unwrap();
+        let (s2_start, s2_end) = graph
+            .add_nodes_for_sequence(b"GT", &weights, 0, 2)
+            .unwrap();
+
+        graph.add_edge(s1_end, s2_start, 0, 1);
+
+        let mut segments = GraphSegments::default();
+        segments.names.push("s1".to_string());
+        segments.start_nodes.push(s1_start);
+        segments.end_nodes.push(s1_end);
+        segments.segment_lengths.push(2);
+
+        segments.names.push("s2".to_string());
+        segments.start_nodes.push(s2_start);
+        segments.end_nodes.push(s2_end);
+        segments.segment_lengths.push(2);
+
+        let resolver = NodeSegmentResolver::new(&graph, &segments);
+
+        let s1_second = graph.successors(s1_start).next().unwrap();
+        assert_eq!(resolver.resolve(s1_start), Some((0, 0)));
+        assert_eq!(resolver.resolve(s1_second), Some((0, 1)));
+
+        let s2_second = graph.successors(s2_start).next().unwrap();
+        assert_eq!(resolver.resolve(s2_start), Some((1, 0)));
+        assert_eq!(resolver.resolve(s2_second), Some((1, 1)));
+
+        assert_eq!(resolver.resolve(graph.start_node()), None);
+    }
+}
+
 impl Display for GAFRecord {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let fields_str = self.additional_fields.iter()
