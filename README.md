@@ -3,6 +3,9 @@
 
 <p>&nbsp;</p>
 
+[![CI](https://github.com/broadinstitute/poasta/actions/workflows/ci.yml/badge.svg)](https://github.com/broadinstitute/poasta/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/broadinstitute/poasta/branch/main/graph/badge.svg)](https://codecov.io/gh/broadinstitute/poasta)
+
+
 POASTA is a fast and optimal partial order aligner that supports gap-affine alignment penalties. Inspired by 
 a recent [algorithm for pairwise alignment](https://github.com/smarco/WFA2-lib), it can exploit exact matches
 between the query and the graph, greatly speeding up the alignment process.
