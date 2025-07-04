@@ -1,6 +1,5 @@
 use std::fmt::{self, Display, Write};
 
-use rustc_hash::FxHashMap;
 use itertools::Itertools;
 
 use crate::aligner::Alignment;
@@ -9,6 +8,51 @@ use crate::graphs::AlignableRefGraph;
 
 use super::gfa::{Field, FieldValue};
 use super::graph::GraphSegments;
+
+/// Resolve which GFA segment a POA node belongs to.
+#[derive(Copy, Clone)]
+pub struct NodeSegmentResolver<'a, Ix>
+where
+    Ix: petgraph::graph::IndexType + serde::de::DeserializeOwned,
+{
+    graph: &'a POAGraph<Ix>,
+    segments: &'a GraphSegments<Ix>,
+}
+
+impl<'a, Ix> NodeSegmentResolver<'a, Ix>
+where
+    Ix: petgraph::graph::IndexType + serde::de::DeserializeOwned,
+{
+    /// Create a new resolver for the given graph.
+    pub fn new(graph: &'a POAGraph<Ix>, segments: &'a GraphSegments<Ix>) -> Self {
+        Self { graph, segments }
+    }
+
+    /// Return the segment index and position of `node` within that segment.
+    pub fn resolve(&self, node: POANodeIndex<Ix>) -> Option<(usize, usize)> {
+        for (segment_ix, (&start, &end)) in
+            self.segments.start_nodes.iter().zip(&self.segments.end_nodes).enumerate()
+        {
+            let mut curr = start;
+            let mut pos = 0usize;
+
+            loop {
+                if curr == node {
+                    return Some((segment_ix, pos));
+                }
+
+                if curr == end {
+                    break;
+                }
+
+                curr = self.graph.successors(curr).next()?;
+                pos += 1;
+            }
+        }
+
+        None
+    }
+}
 
 
 pub struct GAFRecord {
@@ -65,8 +109,8 @@ pub fn alignment_to_gaf<Ix>(
     graph_segments: &GraphSegments<Ix>,
     seq_name: &str,
     sequence: &[u8],
-    alignment: &Alignment<POANodeIndex<Ix>>, 
-    node_to_segment: &FxHashMap<POANodeIndex<Ix>, (usize, usize)>
+    alignment: &Alignment<POANodeIndex<Ix>>,
+    resolver: &NodeSegmentResolver<Ix>,
 ) -> Option<GAFRecord>
 where 
     Ix: petgraph::graph::IndexType + serde::de::DeserializeOwned,
@@ -90,9 +134,11 @@ where
             if aln_pair.is_insertion() {
                 query_start += 1;
             } else if aln_pair.is_aligned() {
-                let (segment_ix, segment_pos) = node_to_segment.get(&aln_pair.rpos.unwrap()).unwrap();
-                path_aln_start = *segment_pos;
-                path_segments.push(*segment_ix);
+                let (segment_ix, segment_pos) = resolver
+                    .resolve(aln_pair.rpos.unwrap())
+                    .expect("node not found in any segment");
+                path_aln_start = segment_pos;
+                path_segments.push(segment_ix);
                 cigar_ops.push(if graph.is_symbol_equal(aln_pair.rpos.unwrap(), sequence[aln_pair.qpos.unwrap()]) {
                     num_matches += 1;
                     '='
@@ -102,15 +148,17 @@ where
                     
                 at_aln_start = false;
                 last_match_segment_ix = path_segments.len() - 1;
-                last_match_segment_pos = *segment_pos;
+                last_match_segment_pos = segment_pos;
             }
         } else {
             match (aln_pair.rpos, aln_pair.qpos) {
                 (Some(node), Some(qpos)) => {
-                    let (segment_ix, segment_pos) = node_to_segment.get(&node).unwrap();
-                    
-                    if path_segments.last().copied() != Some(*segment_ix) {
-                        path_segments.push(*segment_ix);
+                    let (segment_ix, segment_pos) = resolver
+                        .resolve(node)
+                        .expect("node not found in any segment");
+
+                    if path_segments.last().copied() != Some(segment_ix) {
+                        path_segments.push(segment_ix);
                     }
                     
                     cigar_ops.push(if graph.is_symbol_equal(node, sequence[qpos]) {
@@ -121,14 +169,16 @@ where
                     });
                     
                     last_match_segment_ix = path_segments.len() - 1;
-                    last_match_segment_pos = *segment_pos;
+                    last_match_segment_pos = segment_pos;
                 },
-                
+
                 (Some(node), None) => {
-                    let (segment_ix, _) = node_to_segment.get(&node).unwrap();
-                    
-                    if path_segments.last().copied() != Some(*segment_ix) {
-                        path_segments.push(*segment_ix);
+                    let (segment_ix, _) = resolver
+                        .resolve(node)
+                        .expect("node not found in any segment");
+
+                    if path_segments.last().copied() != Some(segment_ix) {
+                        path_segments.push(segment_ix);
                     }
                     
                     cigar_ops.push('D');
