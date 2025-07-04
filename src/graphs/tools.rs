@@ -35,3 +35,36 @@ pub fn rev_postorder_nodes<G: AlignableRefGraph>(graph: &G) -> Vec<G::NodeIndex>
     ordered.reverse();
     ordered
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::mock::MockGraph;
+
+    #[test]
+    fn single_node_graph() {
+        let mut g = MockGraph::default();
+        let n = g.add_node(1);
+
+        let order = rev_postorder_nodes(&g);
+        assert_eq!(order, vec![n]);
+    }
+
+    #[test]
+    fn small_branching_graph() {
+        let mut g = MockGraph::default();
+        let n1 = g.add_node(1);
+        let n2 = g.add_node(2);
+        let n3 = g.add_node(3);
+        let n4 = g.add_node(4);
+
+        g.add_edge(n1, n2, ());
+        g.add_edge(n1, n3, ());
+        g.add_edge(n2, n4, ());
+        g.add_edge(n3, n4, ());
+
+        let order = rev_postorder_nodes(&g);
+
+        assert_eq!(order, vec![n1, n2, n3, n4]);
+    }
+}
