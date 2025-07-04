@@ -21,17 +21,17 @@ Partial order alignment (POA) extends traditional sequence alignment to align se
 
 \section{Mathematical Framework}
 
-\subsection{Standard Affine Gap Model}
+\subsection{Standard Affine Gap Model as Special Case}
 
-The current gap penalty function is defined as:
+The standard affine gap penalty function is defined as:
 \begin{equation}
 g_{\text{affine}}(k) = \begin{cases} 
 0 & \text{if } k = 0 \\
-\alpha + \beta \cdot (k-1) & \text{if } k > 0
+\alpha + \beta \cdot k & \text{if } k > 0
 \end{cases}
 \end{equation}
 
-where $\alpha$ is the gap opening penalty, $\beta$ is the gap extension penalty, and $k$ is the gap length.
+where $\alpha$ is the gap opening penalty, $\beta$ is the gap extension penalty, and $k$ is the gap length. This is equivalent to a 1-piece multi-piece model with no breakpoints.
 
 \subsection{Generalized Multi-Piece Gap-Affine Model}
 
@@ -179,6 +179,74 @@ f(i, v, s, j, \ell) = g(i, v, s, j, \ell) + h(i, v, s, j, \ell)
 \end{equation}
 
 where $g(i, v, s, j, \ell)$ is the actual cost to reach state $(i, v, s, j, \ell)$.
+
+\section{Unified A* Implementation Strategy}
+
+\subsection{Generalized State Representation}
+
+Instead of treating single-piece and multi-piece as separate cases, we implement a unified representation where traditional affine gaps are simply multi-piece gaps with $p = 1$:
+
+\begin{align}
+\text{AlignState} &= (\text{BasicState}, \text{PieceInfo}) \\
+\text{BasicState} &\in \{\text{Match}, \text{Insertion}, \text{Deletion}\} \\
+\text{PieceInfo} &= (j, \ell) \text{ where } j \in [1, p], \ell \in [1, k_j - k_{j-1}]
+\end{align}
+
+For traditional affine gaps ($p = 1$), we have:
+\begin{align}
+\text{PieceInfo} &= (1, \ell) \text{ where } \ell \in [1, \infty] \\
+\text{cost} &= \alpha + \ell \cdot \beta_1
+\end{align}
+
+\subsection{Unified Transition Function}
+
+The A* expansion function becomes:
+\begin{algorithmic}
+\STATE \textbf{function} \textsc{ExpandState}$(i, v, \text{state}, j, \ell)$
+\IF{$\text{state} = \text{Match}$}
+    \STATE // Transition to match/mismatch
+    \FOR{$u \in \text{successors}(v)$}
+        \STATE \textsc{Queue}$(i+1, u, \text{Match}, 0, 0)$ with cost $\sigma(q_{i+1}, u)$
+    \ENDFOR
+    \STATE // Open new gap (insertion/deletion)
+    \STATE \textsc{Queue}$(i+1, v, \text{Insertion}, 1, 1)$ with cost $\alpha + \beta_1$
+    \FOR{$u \in \text{successors}(v)$}
+        \STATE \textsc{Queue}$(i, u, \text{Deletion}, 1, 1)$ with cost $\alpha + \beta_1$
+    \ENDFOR
+\ELSIF{$\text{state} = \text{Insertion}$}
+    \STATE // Close gap (zero cost transition)
+    \STATE \textsc{Queue}$(i, v, \text{Match}, 0, 0)$ with cost $0$
+    \STATE // Extend gap within current piece
+    \IF{$\ell < k_j - k_{j-1}$}
+        \STATE \textsc{Queue}$(i+1, v, \text{Insertion}, j, \ell+1)$ with cost $\beta_j$
+    \ELSIF{$j < p$}
+        \STATE // Transition to next piece
+        \STATE \textsc{Queue}$(i+1, v, \text{Insertion}, j+1, 1)$ with cost $\beta_{j+1}$
+    \ENDIF
+\ELSIF{$\text{state} = \text{Deletion}$}
+    \STATE // Close gap (zero cost transition)
+    \STATE \textsc{Queue}$(i, v, \text{Match}, 0, 0)$ with cost $0$
+    \STATE // Extend gap within current piece
+    \FOR{$u \in \text{successors}(v)$}
+        \IF{$\ell < k_j - k_{j-1}$}
+            \STATE \textsc{Queue}$(i, u, \text{Deletion}, j, \ell+1)$ with cost $\beta_j$
+        \ELSIF{$j < p$}
+            \STATE // Transition to next piece
+            \STATE \textsc{Queue}$(i, u, \text{Deletion}, j+1, 1)$ with cost $\beta_{j+1}$
+        \ENDIF
+    \ENDFOR
+\ENDIF
+\end{algorithmic}
+
+\subsection{Implementation Benefits}
+
+This unified approach provides:
+\begin{itemize}
+\item \textbf{No special cases}: Traditional affine is just $p=1$ multi-piece
+\item \textbf{Simple interface}: Same algorithm handles all gap models
+\item \textbf{Extensibility}: Easy to add new piece configurations
+\item \textbf{Performance}: No overhead for traditional affine gaps
+\end{itemize}
 
 \section{Complexity Analysis}
 

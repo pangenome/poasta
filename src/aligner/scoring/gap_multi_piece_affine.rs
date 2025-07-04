@@ -1,6 +1,6 @@
 use crate::graphs::{AlignableRefGraph, NodeIndexType};
 use crate::aligner::offsets::OffsetType;
-use crate::aligner::scoring::{AlignmentCosts, AlignmentType, Score};
+use crate::aligner::scoring::{AlignmentCosts, AlignmentType, GeneralizedGapCosts, Score};
 use crate::aligner::aln_graph::{AlignmentGraph, AlignmentGraphNode, AlignState};
 use crate::aligner::astar::{AstarQueue, AstarQueuedItem, AstarVisited};
 use crate::aligner::queue::{LayeredQueue, QueueLayer};
@@ -112,7 +112,7 @@ impl GapMultiPieceAffine {
     /// Calculate gap cost for a given length using the mathematical formula:
     /// g_multi-piece(ℓ) = α + Σ(i=1 to j-1) βᵢ·(kᵢ - k_{i-1}) + βⱼ·(ℓ - k_{j-1})
     /// where k_{j-1} < ℓ ≤ kⱼ
-    pub fn gap_cost(&self, gap_length: usize) -> usize {
+    pub fn calculate_gap_cost(&self, gap_length: usize) -> usize {
         if gap_length == 0 {
             return 0;
         }
@@ -264,14 +264,80 @@ impl GapMultiPieceAffine {
     }
 }
 
+impl GeneralizedGapCosts for GapMultiPieceAffine {
+    fn num_pieces(&self) -> usize {
+        self.num_pieces as usize
+    }
+    
+    fn piece_extension_cost(&self, piece_index: usize) -> u8 {
+        if piece_index == 0 || piece_index > self.num_pieces as usize {
+            panic!("Invalid piece index {}, must be in range [1, {}]", piece_index, self.num_pieces);
+        }
+        self.extension_costs[piece_index - 1] // Convert to 0-indexed
+    }
+    
+    fn piece_max_length(&self, piece_index: usize) -> Option<usize> {
+        if piece_index == 0 || piece_index > self.num_pieces as usize {
+            panic!("Invalid piece index {}, must be in range [1, {}]", piece_index, self.num_pieces);
+        }
+        
+        if piece_index == self.num_pieces as usize {
+            None // Final piece has infinite length
+        } else {
+            // Calculate piece length: k_j - k_{j-1}
+            let k_j = self.breakpoints[piece_index - 1]; // breakpoints[0] = k_1
+            let k_j_minus_1 = if piece_index == 1 { 
+                1 
+            } else { 
+                self.breakpoints[piece_index - 2] + 1
+            };
+            Some(k_j - k_j_minus_1 + 1)
+        }
+    }
+    
+    fn gap_open_cost(&self) -> u8 {
+        self.cost_gap_open
+    }
+    
+    fn match_cost(&self, is_match: bool) -> u8 {
+        if is_match {
+            0
+        } else {
+            self.cost_mismatch
+        }
+    }
+    
+    fn total_gap_cost(&self, gap_length: usize) -> usize {
+        if gap_length == 0 {
+            0
+        } else {
+            self.calculate_gap_cost(gap_length)
+        }
+    }
+    
+    fn should_transition_piece(&self, current_piece: usize, current_length: usize) -> (bool, usize) {
+        if current_piece >= self.num_pieces as usize {
+            (false, current_piece) // Already in final piece
+        } else if let Some(max_length) = self.piece_max_length(current_piece) {
+            if current_length >= max_length {
+                (true, current_piece + 1)
+            } else {
+                (false, current_piece)
+            }
+        } else {
+            (false, current_piece) // Infinite piece length
+        }
+    }
+}
+
 impl AlignmentCosts for GapMultiPieceAffine {
-    type AlignmentGraphType = MultiPieceAffineAlignmentGraph;
+    type AlignmentGraphType = crate::aligner::scoring::unified_gap_alignment::UnifiedGapAlignmentGraph<GapMultiPieceAffine>;
     type QueueType<N, O> = MultiPieceAffineLayeredQueue<N, O>
         where N: NodeIndexType,
               O: OffsetType;
 
     fn new_alignment_graph(&self, aln_type: AlignmentType) -> Self::AlignmentGraphType {
-        MultiPieceAffineAlignmentGraph::new(self, aln_type)
+        crate::aligner::scoring::unified_gap_alignment::UnifiedGapAlignmentGraph::new(*self, aln_type)
     }
 
     #[inline(always)]
@@ -313,10 +379,11 @@ impl AlignmentCosts for GapMultiPieceAffine {
             AlignState::Insertion | AlignState::Deletion => 0,
             AlignState::Match => self.cost_gap_open as usize,
             AlignState::Insertion2 | AlignState::Deletion2 => 0, // Multi-piece states
+            AlignState::MultiInsertion { .. } | AlignState::MultiDeletion { .. } => 0, // Already in multi-piece gap
         };
 
         // Use the multi-piece gap cost calculation
-        let multi_piece_cost = self.calculate_multi_piece_gap_cost(length);
+        let multi_piece_cost = self.calculate_gap_cost(length);
         gap_open + multi_piece_cost - self.cost_gap_open as usize
     }
 }
@@ -454,16 +521,8 @@ impl AlignmentGraph for MultiPieceAffineAlignmentGraph {
                         f(extend_cost, new_node, AlignState::Insertion);
                     }
                     
-                    // Also try second piece cost if it's cheaper and we have multiple pieces
-                    if self.costs.num_pieces() > 1 {
-                        let extend_cost_2 = self.costs.gap_extend2();
-                        if extend_cost_2 > 0 && extend_cost_2 < extend_cost {
-                            let new_score_2 = score + extend_cost_2;
-                            if visited_data.update_score_if_lower(&new_node, AlignState::Insertion2, node, state, new_score_2) {
-                                f(extend_cost_2, new_node, AlignState::Insertion2);
-                            }
-                        }
-                    }
+                    // TODO: Multi-piece transitions disabled due to AffineAstarData limitations
+                    // Would need custom MultiPieceAstarData to handle Insertion2/Deletion2 states
                 }
             },
             
@@ -486,58 +545,19 @@ impl AlignmentGraph for MultiPieceAffineAlignmentGraph {
                         f(extend_cost, new_node, AlignState::Deletion);
                     }
                     
-                    // Also try second piece cost if it's cheaper and we have multiple pieces
-                    if self.costs.num_pieces() > 1 {
-                        let extend_cost_2 = self.costs.gap_extend2();
-                        if extend_cost_2 > 0 && extend_cost_2 < extend_cost {
-                            let new_score_2 = score + extend_cost_2;
-                            if visited_data.update_score_if_lower(&new_node, AlignState::Deletion2, node, state, new_score_2) {
-                                f(extend_cost_2, new_node, AlignState::Deletion2);
-                            }
-                        }
-                    }
+                    // TODO: Multi-piece transitions disabled due to AffineAstarData limitations
+                    // Would need custom MultiPieceAstarData to handle Insertion2/Deletion2 states
                 }
             },
             
-            AlignState::Insertion2 => {
-                // Second piece insertion state
-                
-                // I2->M transition: free transition
-                if visited_data.update_score_if_lower(node, AlignState::Match, node, state, score) {
-                    f(0, *node, AlignState::Match);
-                }
-
-                // Extend in second piece
-                let child_offset = node.offset().increase_one();
-                if child_offset.as_usize() <= seq.len() {
-                    let extend_cost = self.costs.gap_extend2();
-                    let new_node = AlignmentGraphNode::new(node.node(), child_offset);
-                    let new_score = score + extend_cost;
-                    
-                    if visited_data.update_score_if_lower(&new_node, AlignState::Insertion2, node, state, new_score) {
-                        f(extend_cost, new_node, AlignState::Insertion2);
-                    }
-                }
+            AlignState::Insertion2 | AlignState::Deletion2 => {
+                // Multi-piece states not supported with current AffineAstarData
+                // This should not be reached in the simplified implementation
+                panic!("Multi-piece states {state:?} not supported with AffineAstarData!")
             },
-            
-            AlignState::Deletion2 => {
-                // Second piece deletion state
-                
-                // D2->M transition: free transition
-                if visited_data.update_score_if_lower(node, AlignState::Match, node, state, score) {
-                    f(0, *node, AlignState::Match);
-                }
-
-                // Extend in second piece
-                for ref_succ in ref_graph.successors(node.node()) {
-                    let extend_cost = self.costs.gap_extend2();
-                    let new_node = AlignmentGraphNode::new(ref_succ, node.offset());
-                    let new_score = score + extend_cost;
-                    
-                    if visited_data.update_score_if_lower(&new_node, AlignState::Deletion2, node, state, new_score) {
-                        f(extend_cost, new_node, AlignState::Deletion2);
-                    }
-                }
+            AlignState::MultiInsertion { .. } | AlignState::MultiDeletion { .. } => {
+                // Multi-piece states with position tracking
+                panic!("Multi-piece states {state:?} not yet implemented!")
             }
         }
     }
@@ -753,7 +773,10 @@ impl MultiPieceAffineAlignmentGraph {
                     }
                 }
             },
-            _ => unreachable!("Only Insertion2 and Deletion2 should reach here")
+            AlignState::Match | AlignState::Insertion | AlignState::Deletion => 
+                unreachable!("Only Insertion2 and Deletion2 should reach here"),
+            AlignState::MultiInsertion { .. } | AlignState::MultiDeletion { .. } => 
+                panic!("Multi-piece states with position tracking not yet implemented")
         }
     }
 
@@ -830,6 +853,10 @@ impl<N, O> AstarVisited<N, O> for MultiPieceAstarData<N, O>
             AlignState::Insertion2 | AlignState::Deletion2 => {
                 // Advanced multi-piece states - use piece 1 by default
                 self.visited.get_score_gap(node, state, 1, 1)
+            },
+            AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
+                // Multi-piece states with explicit position tracking
+                self.visited.get_score_gap(node, state, piece as usize, position as usize)
             }
         }
     }
@@ -845,6 +872,9 @@ impl<N, O> AstarVisited<N, O> for MultiPieceAstarData<N, O>
             },
             AlignState::Insertion2 | AlignState::Deletion2 => {
                 self.visited.set_score_gap(node, state, 1, 1, score);
+            },
+            AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
+                self.visited.set_score_gap(node, state, piece as usize, position as usize, score);
             }
         }
     }
@@ -869,6 +899,9 @@ impl<N, O> AstarVisited<N, O> for MultiPieceAstarData<N, O>
             },
             AlignState::Insertion2 | AlignState::Deletion2 => {
                 self.visited.update_score_if_lower_gap(node, state, 1, 1, score)
+            },
+            AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
+                self.visited.update_score_if_lower_gap(node, state, piece as usize, position as usize, score)
             }
         }
     }
@@ -1134,7 +1167,11 @@ impl<N, O, const B: usize> BlockedVisitedStorageMultiPieceAffine<N, O, B>
                 match aln_state {
                     AlignState::Insertion => cell_data.visited_i[piece][length_in_piece],
                     AlignState::Deletion => cell_data.visited_d[piece][length_in_piece],
-                    _ => Score::Unvisited
+                    AlignState::Insertion2 => cell_data.visited_i[piece][length_in_piece],
+                    AlignState::Deletion2 => cell_data.visited_d[piece][length_in_piece],
+                    AlignState::MultiInsertion { .. } => cell_data.visited_i[piece][length_in_piece],
+                    AlignState::MultiDeletion { .. } => cell_data.visited_d[piece][length_in_piece],
+                    AlignState::Match => Score::Unvisited
                 }
             })
             .unwrap_or(Score::Unvisited)
@@ -1169,7 +1206,11 @@ impl<N, O, const B: usize> BlockedVisitedStorageMultiPieceAffine<N, O, B>
         match aln_state {
             AlignState::Insertion => cell_data.visited_i[piece][length_in_piece] = score,
             AlignState::Deletion => cell_data.visited_d[piece][length_in_piece] = score,
-            _ => {} // Only handle insertion and deletion states
+            AlignState::Insertion2 => cell_data.visited_i[piece][length_in_piece] = score,
+            AlignState::Deletion2 => cell_data.visited_d[piece][length_in_piece] = score,
+            AlignState::MultiInsertion { .. } => cell_data.visited_i[piece][length_in_piece] = score,
+            AlignState::MultiDeletion { .. } => cell_data.visited_d[piece][length_in_piece] = score,
+            AlignState::Match => {} // Match state not handled here
         }
     }
 
@@ -1196,7 +1237,11 @@ impl<N, O, const B: usize> BlockedVisitedStorageMultiPieceAffine<N, O, B>
         let target_score = match aln_state {
             AlignState::Insertion => &mut cell_data.visited_i[piece][length_in_piece],
             AlignState::Deletion => &mut cell_data.visited_d[piece][length_in_piece],
-            _ => return false
+            AlignState::Insertion2 => &mut cell_data.visited_i[piece][length_in_piece],
+            AlignState::Deletion2 => &mut cell_data.visited_d[piece][length_in_piece],
+            AlignState::MultiInsertion { .. } => &mut cell_data.visited_i[piece][length_in_piece],
+            AlignState::MultiDeletion { .. } => &mut cell_data.visited_d[piece][length_in_piece],
+            AlignState::Match => return false
         };
 
         match score.cmp(target_score) {
@@ -1290,6 +1335,18 @@ impl<N, O> QueueLayer for MultiPieceAffineQueueLayer<N, O>
                         AlignState::Deletion 
                     }
                 )
+            },
+            AlignState::MultiInsertion { piece, position } => MultiPieceAlignState {
+                basic_state: AlignState::Insertion,
+                piece_index: piece,
+                length_in_piece: position,
+                total_gap_length: 0, // This would need proper calculation in full implementation
+            },
+            AlignState::MultiDeletion { piece, position } => MultiPieceAlignState {
+                basic_state: AlignState::Deletion,
+                piece_index: piece,
+                length_in_piece: position,
+                total_gap_length: 0, // This would need proper calculation in full implementation
             }
         };
 
@@ -1304,13 +1361,28 @@ impl<N, O> QueueLayer for MultiPieceAffineQueueLayer<N, O>
     fn pop(&mut self) -> Option<Self::QueueItem> {
         self.queued_states_m
             .pop()
-            .map(|(score, node, state)| AstarQueuedItem(score, node, state.basic_state))
+            .map(|(score, node, state)| {
+                let aln_state = if state.basic_state == AlignState::Match {
+                    AlignState::Match
+                } else if state.basic_state == AlignState::Insertion {
+                    AlignState::multi_insertion(state.piece_index, state.length_in_piece)
+                } else {
+                    AlignState::multi_deletion(state.piece_index, state.length_in_piece)
+                };
+                AstarQueuedItem(score, node, aln_state)
+            })
             .or_else(|| self.queued_states_d
                 .pop()
-                .map(|(score, node, state)| AstarQueuedItem(score, node, state.basic_state))
+                .map(|(score, node, state)| {
+                    let aln_state = AlignState::multi_deletion(state.piece_index, state.length_in_piece);
+                    AstarQueuedItem(score, node, aln_state)
+                })
                 .or_else(|| self.queued_states_i
                     .pop()
-                    .map(|(score, node, state)| AstarQueuedItem(score, node, state.basic_state))
+                    .map(|(score, node, state)| {
+                        let aln_state = AlignState::multi_insertion(state.piece_index, state.length_in_piece);
+                        AstarQueuedItem(score, node, aln_state)
+                    })
                 )
             )
     }
@@ -1394,31 +1466,31 @@ mod tests {
     fn test_standard_affine() {
         let gap_model = GapMultiPieceAffine::standard_affine(4, 6, 2);
         assert_eq!(gap_model.num_pieces(), 1);
-        assert_eq!(gap_model.gap_cost(0), 0);
-        assert_eq!(gap_model.gap_cost(1), 8); // 6 + 2*1
-        assert_eq!(gap_model.gap_cost(5), 16); // 6 + 2*5
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 0), 0);
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 1), 8); // 6 + 2*1
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 5), 16); // 6 + 2*5
     }
 
     #[test]
     fn test_two_piece() {
         let gap_model = GapMultiPieceAffine::two_piece(4, 6, 2, 1, 3);
         assert_eq!(gap_model.num_pieces(), 2);
-        assert_eq!(gap_model.gap_cost(0), 0);
-        assert_eq!(gap_model.gap_cost(1), 8); // 6 + 2*1
-        assert_eq!(gap_model.gap_cost(3), 12); // 6 + 2*3
-        assert_eq!(gap_model.gap_cost(4), 13); // 6 + 2*3 + 1*1
-        assert_eq!(gap_model.gap_cost(10), 19); // 6 + 2*3 + 1*7
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 0), 0);
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 1), 8); // 6 + 2*1
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 3), 12); // 6 + 2*3
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 4), 13); // 6 + 2*3 + 1*1
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 10), 19); // 6 + 2*3 + 1*7
     }
 
     #[test]
     fn test_three_piece() {
         let gap_model = GapMultiPieceAffine::three_piece(4, 6, [2, 1, 0], [3, 10]);
         assert_eq!(gap_model.num_pieces(), 3);
-        assert_eq!(gap_model.gap_cost(1), 8); // 6 + 2*1
-        assert_eq!(gap_model.gap_cost(3), 12); // 6 + 2*3
-        assert_eq!(gap_model.gap_cost(10), 19); // 6 + 2*3 + 1*7
-        assert_eq!(gap_model.gap_cost(15), 19); // 6 + 2*3 + 1*7 + 0*5 = 19
-        assert_eq!(gap_model.gap_cost(20), 19); // No additional cost in third piece
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 1), 8); // 6 + 2*1
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 3), 12); // 6 + 2*3
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 10), 19); // 6 + 2*3 + 1*7
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 15), 19); // 6 + 2*3 + 1*7 + 0*5 = 19
+        assert_eq!(gap_model.gap_cost(AlignState::Match, 20), 19); // No additional cost in third piece
     }
 
     #[test]
@@ -1531,11 +1603,117 @@ mod tests {
         // Single-piece: 6 + 5*2 = 16
         // Multi-piece: 6 + 3*2 + 2*1 = 14
         let single_cost = single_piece.gap_open() as usize + 5 * single_piece.gap_extend() as usize;
-        let multi_cost = multi_piece.gap_cost(5);
+        let multi_cost = multi_piece.gap_cost(AlignState::Match, 5);
         
         assert_eq!(single_cost, 16);
         assert_eq!(multi_cost, 14);
         assert_ne!(single_cost, multi_cost, "Gap cost calculations should be different");
+    }
+
+    #[test] 
+    fn test_gap_cost_implementation_is_working() {
+        use crate::aligner::scoring::{GapAffine, AlignmentCosts};
+        use crate::aligner::aln_graph::AlignState;
+        
+        // Test that the gap cost calculation itself works correctly
+        let multi_piece = GapMultiPieceAffine::new(4, 6, &[3], &[2, 1]);
+        
+        // Test direct gap cost calculation (using the public method)
+        assert_eq!(multi_piece.calculate_gap_cost(1), 8);  // 6 + 1*2 = 8
+        assert_eq!(multi_piece.calculate_gap_cost(3), 12); // 6 + 3*2 = 12
+        assert_eq!(multi_piece.calculate_gap_cost(5), 14); // 6 + 3*2 + 2*1 = 14
+        
+        // Test against single piece
+        let single_piece = GapAffine::new(4, 2, 6);
+        assert_eq!(single_piece.gap_cost(AlignState::Match, 5), 16); // 6 + 5*2 = 16
+        
+        // Multi-piece should be cheaper for long gaps
+        assert!(multi_piece.calculate_gap_cost(5) < single_piece.gap_cost(AlignState::Match, 5));
+        
+        println!("Gap cost test: Multi-piece(5) = {}, Single-piece(5) = {}", 
+                 multi_piece.calculate_gap_cost(5), 
+                 single_piece.gap_cost(AlignState::Match, 5));
+    }
+    
+    #[test]
+    fn test_alignment_costs_trait_methods() {
+        use crate::aligner::scoring::AlignmentCosts;
+        use crate::aligner::aln_graph::AlignState;
+        
+        let multi_piece = GapMultiPieceAffine::new(4, 6, &[3], &[2, 1]);
+        
+        // Test basic trait methods
+        assert_eq!(multi_piece.mismatch(), 4);
+        assert_eq!(multi_piece.gap_open(), 6);
+        assert_eq!(multi_piece.gap_extend(), 2);    // First piece
+        assert_eq!(multi_piece.gap_extend2(), 1);   // Second piece
+        
+        // Test gap_cost trait method
+        assert_eq!(multi_piece.gap_cost(AlignState::Match, 0), 0);
+        assert_eq!(multi_piece.gap_cost(AlignState::Match, 1), 8);  // Should be 6 + 1*2 = 8
+        assert_eq!(multi_piece.gap_cost(AlignState::Match, 5), 14); // Should be 6 + 3*2 + 2*1 = 14
+        
+        println!("Trait method gap_cost(Match, 5) = {}", multi_piece.gap_cost(AlignState::Match, 5));
+    }
+    
+    #[test]
+    fn test_cli_parameter_parsing() {
+        use crate::aligner::scoring::AlignmentCosts;
+        use crate::aligner::aln_graph::AlignState;
+        
+        // Test that the CLI parameter parsing creates correct models
+        
+        // Single piece: -e "2" -g "6"
+        let single = GapMultiPieceAffine::standard_affine(4, 6, 2);
+        assert_eq!(single.num_pieces(), 1);
+        assert_eq!(single.gap_extend(), 2);
+        
+        // Two piece: -e "2,1" -g "6"  
+        let two_piece = GapMultiPieceAffine::new(4, 6, &[3], &[2, 1]);
+        assert_eq!(two_piece.num_pieces(), 2);
+        assert_eq!(two_piece.gap_extend(), 2);   // First piece
+        assert_eq!(two_piece.gap_extend2(), 1);  // Second piece
+        
+        // Verify costs are different
+        assert_ne!(single.gap_cost(AlignState::Match, 5), two_piece.gap_cost(AlignState::Match, 5));
+        
+        println!("CLI parsing test: Single(5) = {}, Two-piece(5) = {}", 
+                 single.gap_cost(AlignState::Match, 5),
+                 two_piece.gap_cost(AlignState::Match, 5));
+    }
+    
+    #[test]
+    fn test_why_alignment_scores_are_same() {
+        // This test investigates why alignment scores are the same despite different gap costs
+        use crate::graphs::poa::POAGraph;
+        use crate::aligner::PoastaAligner;
+        use crate::aligner::config::{AffineMinGapCost, MultiPieceAffineMinGapCost};
+        use crate::aligner::scoring::{GapAffine, AlignmentType, AlignmentCosts};
+        use crate::aligner::aln_graph::AlignState;
+        
+        let mut graph = POAGraph::<u32>::new();
+        let seq1 = b"ATCG";
+        graph.add_alignment_with_weights("seq1", seq1, None, &vec![1; seq1.len()]).unwrap();
+        
+        // Test with a simple gap
+        let seq2 = b"ATCGAAACG"; // 3 A's inserted
+        
+        let single_piece = GapAffine::new(4, 2, 6);
+        let single_aligner = PoastaAligner::new(AffineMinGapCost(single_piece), AlignmentType::Global);
+        let single_result = single_aligner.align::<u32, _>(&graph, seq2);
+        
+        let multi_piece = GapMultiPieceAffine::new(4, 6, &[3], &[2, 1]);
+        let multi_aligner = PoastaAligner::new(MultiPieceAffineMinGapCost(multi_piece), AlignmentType::Global);
+        let multi_result = multi_aligner.align::<u32, _>(&graph, seq2);
+        
+        println!("Simple gap test:");
+        println!("  Single-piece score: {:?}", single_result.score);
+        println!("  Multi-piece score: {:?}", multi_result.score);
+        println!("  Single-piece gap cost for 3: {}", single_piece.gap_cost(AlignState::Match, 3));
+        println!("  Multi-piece gap cost for 3: {}", multi_piece.gap_cost(AlignState::Match, 3));
+        
+        // The issue might be that both are using the same A* transitions
+        // Let's see if the gap costs are actually being used
     }
 
     #[test]

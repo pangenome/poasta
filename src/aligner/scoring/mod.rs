@@ -1,6 +1,8 @@
 // pub mod gap_linear;
 pub mod gap_affine;
 pub mod gap_multi_piece_affine;
+// pub mod generalized_gap_astar;  // Unused for now
+pub mod unified_gap_alignment;
 
 use crate::aligner::aln_graph::{AlignmentGraph, AlignState};
 
@@ -33,6 +35,35 @@ pub trait AlignmentCosts: Copy {
     fn gap_extend2(&self) -> u8;
 
     fn gap_cost(&self, current_state: AlignState, length: usize) -> usize;
+}
+
+/// Generalized trait for gap cost models supporting arbitrary multi-piece penalties
+/// This trait enables a unified A* algorithm that works with both traditional affine 
+/// and multi-piece gap models without code duplication.
+pub trait GeneralizedGapCosts: Copy {
+    /// Get the number of pieces in this gap model
+    fn num_pieces(&self) -> usize;
+    
+    /// Get extension cost for piece j (1-indexed)
+    fn piece_extension_cost(&self, piece_index: usize) -> u8;
+    
+    /// Get the maximum length for piece j (1-indexed)
+    /// Returns None for the final piece (infinite length)
+    fn piece_max_length(&self, piece_index: usize) -> Option<usize>;
+    
+    /// Calculate the cost of opening a gap
+    fn gap_open_cost(&self) -> u8;
+    
+    /// Calculate the cost of a match/mismatch 
+    fn match_cost(&self, is_match: bool) -> u8;
+    
+    /// Calculate the total cost of a gap of given length
+    /// This provides a fallback for cases where piece-by-piece tracking isn't needed
+    fn total_gap_cost(&self, gap_length: usize) -> usize;
+    
+    /// Check if we should transition to the next piece
+    /// Returns (should_transition, next_piece_index) 
+    fn should_transition_piece(&self, current_piece: usize, current_length: usize) -> (bool, usize);
 }
 
 pub trait GetAlignmentCosts {
