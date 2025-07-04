@@ -682,6 +682,7 @@ impl<N, O> GetAlignmentCosts for AffineAstarData<N, O>
 }
 
 /// Enhanced visited cell that tracks multi-piece gap states
+/// Optimized to avoid HashMap allocation for common cases
 #[derive(Clone, Debug)]
 struct GeneralizedVisitedCell {
     visited_m: Score,
@@ -689,8 +690,12 @@ struct GeneralizedVisitedCell {
     visited_d: Score,
     visited_i2: Score,
     visited_d2: Score,
-    // For multi-piece states: key is (piece << 8) | position
-    visited_multi: FxHashMap<u16, Score>,
+    // Inline storage for up to 6 multi-piece states (most common case)
+    // Format: (key, score) where key = (piece << 8) | position
+    inline_multi: [(u16, Score); 6],
+    inline_count: u8,
+    // Overflow storage for rare cases with many states
+    overflow_multi: Option<Box<FxHashMap<u16, Score>>>,
 }
 
 impl Default for GeneralizedVisitedCell {
@@ -701,8 +706,53 @@ impl Default for GeneralizedVisitedCell {
             visited_d: Score::Unvisited,
             visited_i2: Score::Unvisited,
             visited_d2: Score::Unvisited,
-            visited_multi: FxHashMap::default(),
+            inline_multi: [(0, Score::Unvisited); 6],
+            inline_count: 0,
+            overflow_multi: None,
         }
+    }
+}
+
+impl GeneralizedVisitedCell {
+    #[inline(always)]
+    fn get_multi_score(&self, key: u16) -> Score {
+        // Check inline storage first (most common case)
+        for i in 0..self.inline_count as usize {
+            if self.inline_multi[i].0 == key {
+                return self.inline_multi[i].1;
+            }
+        }
+        
+        // Check overflow if it exists
+        if let Some(ref overflow) = self.overflow_multi {
+            overflow.get(&key).copied().unwrap_or(Score::Unvisited)
+        } else {
+            Score::Unvisited
+        }
+    }
+    
+    #[inline(always)]
+    fn set_multi_score(&mut self, key: u16, score: Score) {
+        // Try to update existing entry in inline storage
+        for i in 0..self.inline_count as usize {
+            if self.inline_multi[i].0 == key {
+                self.inline_multi[i].1 = score;
+                return;
+            }
+        }
+        
+        // Add to inline storage if there's space
+        if (self.inline_count as usize) < self.inline_multi.len() {
+            self.inline_multi[self.inline_count as usize] = (key, score);
+            self.inline_count += 1;
+            return;
+        }
+        
+        // Use overflow storage
+        if self.overflow_multi.is_none() {
+            self.overflow_multi = Some(Box::new(FxHashMap::default()));
+        }
+        self.overflow_multi.as_mut().unwrap().insert(key, score);
     }
 }
 
@@ -761,7 +811,7 @@ where
                     AlignState::Deletion2 => cell.visited_d2,
                     AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
                         let key = ((piece as u16) << 8) | (position as u16);
-                        cell.visited_multi.get(&key).copied().unwrap_or(Score::Unvisited)
+                        cell.get_multi_score(key)
                     },
                 }
             })
@@ -827,9 +877,9 @@ where
             },
             AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
                 let key = ((piece as u16) << 8) | (position as u16);
-                let current_score = cell.visited_multi.get(&key).copied().unwrap_or(Score::Unvisited);
+                let current_score = cell.get_multi_score(key);
                 if new_score < current_score {
-                    cell.visited_multi.insert(key, new_score);
+                    cell.set_multi_score(key, new_score);
                     true
                 } else {
                     false
@@ -865,7 +915,7 @@ where
             AlignState::Deletion2 => cell.visited_d2 = score,
             AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
                 let key = ((piece as u16) << 8) | (position as u16);
-                cell.visited_multi.insert(key, score);
+                cell.set_multi_score(key, score);
             },
         }
     }
@@ -987,7 +1037,7 @@ where
             AlignState::Deletion2 => cell.visited_d2 = score,
             AlignState::MultiInsertion { piece, position } | AlignState::MultiDeletion { piece, position } => {
                 let key = ((piece as u16) << 8) | (position as u16);
-                cell.visited_multi.insert(key, score);
+                cell.set_multi_score(key, score);
             },
         }
     }

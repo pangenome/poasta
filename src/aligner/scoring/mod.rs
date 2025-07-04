@@ -3,6 +3,7 @@ pub mod gap_affine;
 pub mod gap_multi_piece_affine;
 // pub mod generalized_gap_astar;  // Unused for now
 pub mod unified_gap_alignment;
+pub mod multi_piece_optimized;
 
 use crate::aligner::aln_graph::{AlignmentGraph, AlignState};
 
