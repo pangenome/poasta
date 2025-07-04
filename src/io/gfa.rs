@@ -1,5 +1,30 @@
 use std::fmt::{self, Display, Write};
 
+#[cfg(feature = "ascii_radix")]
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, &'static str> {
+    value
+        .as_bytes()
+        .chunks(2)
+        .map(|v| u8::from_ascii_radix(v, 16).map_err(|_| "Could not parse hex"))
+        .collect()
+}
+
+#[cfg(not(feature = "ascii_radix"))]
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, &'static str> {
+    value
+        .as_bytes()
+        .chunks(2)
+        // Fallback requiring UTF-8 conversion until from_ascii_radix is stable
+        .map(|v| {
+            u8::from_str_radix(
+                std::str::from_utf8(v).map_err(|_| "Could not convert bytes to UTF-8")?,
+                16,
+            )
+            .map_err(|_| "Could not parse hex")
+        })
+        .collect()
+}
+
 /// Represents the DNA strand
 #[derive(Debug, PartialEq, Eq)]
 pub enum Strand {
@@ -29,20 +54,7 @@ impl TryFrom<&str> for Field {
             "i" => FieldValue::Integer(value.parse().map_err(|_| "Could not parse integer")?),
             "f" => FieldValue::Float(value.parse().map_err(|_| "Could not parse float")?),
             "J" => FieldValue::Json(value.to_string()),
-            "H" => {
-                let hex_data: Result<Vec<u8>, _> = value.as_bytes().chunks(2)
-                    // TODO: use from_ascii_radix when added to the rust library: 
-                    // https://github.com/rust-lang/libs-team/issues/469
-                    // Now we need to incur UTF-8 validation overhead...
-                    .map(|v| u8::from_str_radix(
-                        std::str::from_utf8(v)
-                            .map_err(|_| "Could not convert bytes to UTF-8")?,
-                        16
-                    ).map_err(|_| "Could not parse hex"))
-                    .collect();
-                
-                FieldValue::ByteArray(hex_data?)
-            },
+            "H" => FieldValue::ByteArray(parse_hex_bytes(value)?),
             "B" => {
                 let mut parts = value.split(',');
                 let num_type = parts.next().ok_or("No number type available")?;
