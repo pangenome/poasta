@@ -72,7 +72,7 @@ pub struct GAFRecord {
 }
 
 #[cfg(test)]
-mod tests {
+mod node_segment_resolver_tests {
     use super::*;
     use crate::graphs::poa::POAGraph;
     use crate::graphs::AlignableRefGraph;
