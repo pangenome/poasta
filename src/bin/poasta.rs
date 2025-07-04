@@ -226,10 +226,10 @@ where
     Ok(())
 }
 
-fn parse_gap_penalties(gap_str: &str) -> Result<Vec<u8>> {
+fn parse_gap_penalties(gap_str: &str) -> Result<Vec<usize>> {
     gap_str
         .split(',')
-        .map(|s| s.trim().parse::<u8>().context("Invalid gap penalty value"))
+        .map(|s| s.trim().parse::<usize>().context("Invalid gap penalty value"))
         .collect()
 }
 
@@ -284,10 +284,10 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
             return Err(anyhow::anyhow!("Two-piece affine mode requires exactly 2 values for both gap-open and gap-extend (e.g., -g 8,24 -e 2,1)"));
         }
         
-        let gap_open1 = gap_open_values[0];
-        let gap_extend1 = gap_extend_values[0];
-        let gap_open2 = gap_open_values[1];
-        let gap_extend2 = gap_extend_values[1];
+        let gap_open1 = gap_open_values[0] as u8;
+        let gap_extend1 = gap_extend_values[0] as u8;
+        let gap_open2 = gap_open_values[1] as u8;
+        let gap_extend2 = gap_extend_values[1] as u8;
         
         if gap_extend1 <= gap_extend2 {
             eprintln!("Warning: gap_extend1 ({}) should be greater than gap_extend2 ({}) for two-piece model", gap_extend1, gap_extend2);
@@ -378,8 +378,8 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
         
         let scoring = GapAffine::new(
             align_args.cost_mismatch.unwrap_or(4),
-            gap_extend_values[0],
-            gap_open_values[0],
+            gap_extend_values[0] as u8,
+            gap_open_values[0] as u8,
         );
         let mut aligner = if let Some(ref debug) = debug_writer {
             PoastaAligner::new_with_debug(AffineMinGapCost(scoring), alignment_type, debug)
@@ -567,4 +567,21 @@ fn main() -> Result<()> {
     };
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_gap_penalties;
+
+    #[test]
+    fn parses_large_penalties() {
+        let gaps = parse_gap_penalties("256,300").unwrap();
+        assert_eq!(gaps, vec![256, 300]);
+    }
+
+    #[test]
+    fn parses_single_value() {
+        let gaps = parse_gap_penalties("6").unwrap();
+        assert_eq!(gaps, vec![6]);
+    }
 }
