@@ -9,4 +9,6 @@ if ! command -v cargo >/dev/null; then
     source "$HOME/.cargo/env"
 fi
 
+rustup component add clippy
+cargo clippy --all-targets -- -D warnings
 cargo build --release
