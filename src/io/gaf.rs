@@ -257,3 +257,55 @@ where
         ],
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::graph::{load_graph_from_gfa, POAGraphFromGFA};
+    use crate::graphs::AlignableRefGraph;
+    use std::path::Path;
+
+    #[test]
+    fn resolves_nodes_to_segments() {
+        let gfa_path = Path::new("tests/test.gfa");
+        let POAGraphFromGFA { graph, graph_segments } =
+            load_graph_from_gfa::<u32>(gfa_path).unwrap();
+
+        let resolver = NodeSegmentResolver::new(&graph, &graph_segments);
+
+        // segment 0 (s1)
+        let s1_start = graph_segments.start_nodes[0];
+        let s1_second = graph.successors(s1_start).find(|&n| n != graph.end_node()).unwrap();
+        let s1_end = graph_segments.end_nodes[0];
+        assert_eq!(resolver.resolve(s1_start), Some((0, 0)));
+        assert_eq!(resolver.resolve(s1_second), Some((0, 1)));
+        assert_eq!(
+            resolver.resolve(s1_end),
+            Some((0, graph_segments.segment_lengths[0] - 1))
+        );
+
+        // segment 1 (s2)
+        let s2_start = graph_segments.start_nodes[1];
+        let s2_end = graph_segments.end_nodes[1];
+        let s2_second = graph.successors(s2_start).find(|&n| n != graph.end_node()).unwrap();
+        assert_eq!(resolver.resolve(s2_start), Some((1, 0)));
+        assert_eq!(resolver.resolve(s2_second), Some((1, 1)));
+        assert_eq!(
+            resolver.resolve(s2_end),
+            Some((1, graph_segments.segment_lengths[1] - 1))
+        );
+
+        // segment 3 (s4)
+        let s4_start = graph_segments.start_nodes[3];
+        let s4_end = graph_segments.end_nodes[3];
+        assert_eq!(resolver.resolve(s4_start), Some((3, 0)));
+        assert_eq!(
+            resolver.resolve(s4_end),
+            Some((3, graph_segments.segment_lengths[3] - 1))
+        );
+
+        // nodes outside of segments
+        assert_eq!(resolver.resolve(graph.start_node()), None);
+        assert_eq!(resolver.resolve(graph.end_node()), None);
+    }
+}
