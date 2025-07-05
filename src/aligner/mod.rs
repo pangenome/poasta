@@ -7,6 +7,7 @@ mod dfa;
 pub mod astar;
 pub mod heuristic;
 pub mod config;
+pub mod path_index;
 
 use std::ops::Bound;
 use std::sync::Arc;
