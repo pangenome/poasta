@@ -12,10 +12,11 @@ use flate2::read::MultiGzDecoder;
 use petgraph::graph::IndexType;
 use serde::de::DeserializeOwned;
 
-use poasta::aligner::config::{AffineMinGapCost, Affine2PieceMinGapCost, AlignmentConfig};
+use poasta::aligner::config::{AffineMinGapCost, Affine2PieceMinGapCost, AlignmentConfig, AffineDijkstra, Affine2PieceDijkstra, AffinePathAware, Affine2PiecePathAware};
 use poasta::debug::messages::DebugOutputMessage;
 use poasta::debug::DebugOutputWriter;
 
+use poasta::aligner::heuristic::HeuristicType;
 use poasta::aligner::scoring::{AlignmentType, GapAffine, GapAffine2Piece};
 use poasta::aligner::PoastaAligner;
 use poasta::errors::PoastaError;
@@ -132,6 +133,11 @@ struct AlignArgs {
     #[arg(short = 'e', default_value = "2")]
     #[clap(help_heading = "Alignment configuration")]
     cost_gap_extend: String,
+
+    /// A* heuristic type: dijkstra, mingap, or path
+    #[arg(short = 'H', long, default_value = "mingap")]
+    #[clap(help_heading = "Alignment configuration")]
+    heuristic: String,
 }
 
 #[derive(Args, Debug)]
@@ -236,11 +242,46 @@ fn parse_gap_penalties(gap_str: &str) -> Result<Vec<usize>> {
         .collect()
 }
 
+macro_rules! perform_alignment_with_graph {
+    ($graph:expr, $aligner:expr, $debug_writer:expr, $sequences:expr) => {
+        match $graph {
+            POAGraphWithIx::U8(ref mut g) => perform_alignment(
+                g,
+                $aligner,
+                $debug_writer.as_ref(),
+                $sequences.as_ref(),
+            )?,
+            POAGraphWithIx::U16(ref mut g) => perform_alignment(
+                g,
+                $aligner,
+                $debug_writer.as_ref(),
+                $sequences.as_ref(),
+            )?,
+            POAGraphWithIx::U32(ref mut g) => perform_alignment(
+                g,
+                $aligner,
+                $debug_writer.as_ref(),
+                $sequences.as_ref(),
+            )?,
+            POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
+                g,
+                $aligner,
+                $debug_writer.as_ref(),
+                $sequences.as_ref(),
+            )?,
+        }
+    };
+}
+
 fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
     let debug_writer = align_args
         .debug_output
         .as_ref()
         .map(DebugOutputWriter::init);
+        
+    // Parse heuristic type
+    let heuristic_type = HeuristicType::from_str(&align_args.heuristic)
+        .ok_or_else(|| anyhow::anyhow!("Invalid heuristic type. Valid options are: dijkstra, mingap, path"))?;
         
     // Convert alignment span to AlignmentType
     let alignment_type = match align_args.alignment_span {
@@ -300,37 +341,32 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
                 gap_extend1,
                 gap_open1,
             );
-            let mut aligner = if let Some(ref debug) = debug_writer {
-                PoastaAligner::new_with_debug(AffineMinGapCost(scoring), alignment_type, debug)
-            } else {
-                PoastaAligner::new(AffineMinGapCost(scoring), alignment_type)
-            };
             
-            match graph {
-                POAGraphWithIx::U8(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::U16(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::U32(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
+            match heuristic_type {
+                HeuristicType::Dijkstra => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(AffineDijkstra(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(AffineDijkstra(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
+                HeuristicType::MinimumGapCost => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(AffineMinGapCost(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(AffineMinGapCost(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
+                HeuristicType::PathAware => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(AffinePathAware(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(AffinePathAware(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
             }
         } else {
             let scoring = GapAffine2Piece::new(
@@ -340,37 +376,32 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
                 gap_extend2,
                 gap_open2,
             );
-            let mut aligner = if let Some(ref debug) = debug_writer {
-                PoastaAligner::new_with_debug(Affine2PieceMinGapCost(scoring), alignment_type, debug)
-            } else {
-                PoastaAligner::new(Affine2PieceMinGapCost(scoring), alignment_type)
-            };
             
-            match graph {
-                POAGraphWithIx::U8(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::U16(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::U32(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
-                POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
-                    g,
-                    &mut aligner,
-                    debug_writer.as_ref(),
-                    align_args.sequences.as_ref(),
-                )?,
+            match heuristic_type {
+                HeuristicType::Dijkstra => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(Affine2PieceDijkstra(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(Affine2PieceDijkstra(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
+                HeuristicType::MinimumGapCost => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(Affine2PieceMinGapCost(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(Affine2PieceMinGapCost(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
+                HeuristicType::PathAware => {
+                    let mut aligner = if let Some(ref debug) = debug_writer {
+                        PoastaAligner::new_with_debug(Affine2PiecePathAware(scoring), alignment_type, debug)
+                    } else {
+                        PoastaAligner::new(Affine2PiecePathAware(scoring), alignment_type)
+                    };
+                    perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+                },
             }
         }
     } else {
@@ -384,37 +415,32 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
             gap_extend_values[0] as u8,
             gap_open_values[0] as u8,
         );
-        let mut aligner = if let Some(ref debug) = debug_writer {
-            PoastaAligner::new_with_debug(AffineMinGapCost(scoring), alignment_type, debug)
-        } else {
-            PoastaAligner::new(AffineMinGapCost(scoring), alignment_type)
-        };
-
-        match graph {
-            POAGraphWithIx::U8(ref mut g) => perform_alignment(
-                g,
-                &mut aligner,
-                debug_writer.as_ref(),
-                align_args.sequences.as_ref(),
-            )?,
-            POAGraphWithIx::U16(ref mut g) => perform_alignment(
-                g,
-                &mut aligner,
-                debug_writer.as_ref(),
-                align_args.sequences.as_ref(),
-            )?,
-            POAGraphWithIx::U32(ref mut g) => perform_alignment(
-                g,
-                &mut aligner,
-                debug_writer.as_ref(),
-                align_args.sequences.as_ref(),
-            )?,
-            POAGraphWithIx::USIZE(ref mut g) => perform_alignment(
-                g,
-                &mut aligner,
-                debug_writer.as_ref(),
-                align_args.sequences.as_ref(),
-            )?,
+        
+        match heuristic_type {
+            HeuristicType::Dijkstra => {
+                let mut aligner = if let Some(ref debug) = debug_writer {
+                    PoastaAligner::new_with_debug(AffineDijkstra(scoring), alignment_type, debug)
+                } else {
+                    PoastaAligner::new(AffineDijkstra(scoring), alignment_type)
+                };
+                perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+            },
+            HeuristicType::MinimumGapCost => {
+                let mut aligner = if let Some(ref debug) = debug_writer {
+                    PoastaAligner::new_with_debug(AffineMinGapCost(scoring), alignment_type, debug)
+                } else {
+                    PoastaAligner::new(AffineMinGapCost(scoring), alignment_type)
+                };
+                perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+            },
+            HeuristicType::PathAware => {
+                let mut aligner = if let Some(ref debug) = debug_writer {
+                    PoastaAligner::new_with_debug(AffinePathAware(scoring), alignment_type, debug)
+                } else {
+                    PoastaAligner::new(AffinePathAware(scoring), alignment_type)
+                };
+                perform_alignment_with_graph!(graph, &mut aligner, debug_writer, align_args.sequences);
+            },
         }
     }
 
