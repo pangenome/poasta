@@ -84,6 +84,13 @@ poasta align -o graph.poasta sequences.fasta
 This will output the graph to a binary file called `graph.poasta`. POASTA can reuse this file to later align
 additional sequences to it.
 
+For complex graphs or specific performance requirements, you can choose different heuristics:
+
+```bash
+# Use path-aware heuristic for pangenome graphs with clear reference paths
+poasta align -H path -o graph.poasta sequences.fasta
+```
+
 ### Re-using an earlier alignment
 
 To align additional sequences to an earlier created partial order graph, specify the existing graph using the 
@@ -223,7 +230,23 @@ POASTA supports different alignment modes:
 poasta align -m ends-free sequences.fasta
 ```
 
-Note: Currently, `ends-free` and `semi-global` modes are only supported with `global` alignment.
+### A* Heuristics
+
+POASTA uses the A* algorithm for optimal sequence-to-graph alignment. You can choose between different heuristics that affect the search strategy:
+
+- `dijkstra`: No heuristic (equivalent to Dijkstra's algorithm). Explores all paths systematically.
+- `mingap`: Minimum gap cost heuristic using bubble structure (default). Provides good performance on most graphs.
+- `path`: Path-aware heuristic that uses major paths through the graph to guide the search. Best for graphs with clear path structure.
+
+```bash
+# Use path-aware heuristic for complex pangenome graphs
+poasta align -H path sequences.fasta
+
+# Use Dijkstra for guaranteed exploration of all options
+poasta align -H dijkstra sequences.fasta
+```
+
+The heuristic only affects the search order, not the final alignment result - all heuristics find the optimal alignment.
 
 ## Aligning sequences with `lasagna`
 
