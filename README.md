@@ -3,6 +3,9 @@
 
 <p>&nbsp;</p>
 
+[![CI](https://github.com/broadinstitute/poasta/actions/workflows/ci.yml/badge.svg)](https://github.com/broadinstitute/poasta/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/broadinstitute/poasta/branch/main/graph/badge.svg)](https://codecov.io/gh/broadinstitute/poasta)
+
+
 POASTA is a fast and optimal partial order aligner that supports gap-affine alignment penalties. Inspired by 
 a recent [algorithm for pairwise alignment](https://github.com/smarco/WFA2-lib), it can exploit exact matches
 between the query and the graph, greatly speeding up the alignment process.
@@ -11,11 +14,27 @@ between the query and the graph, greatly speeding up the alignment process.
 
 ### Pre-built binaries
 
-TODO
+Pre-built executables for Linux and macOS are available from the
+[GitHub releases page](https://github.com/broadinstitute/poasta/releases).
+Download the archive that matches your platform and unpack it:
+
+```bash
+tar -xzf poasta-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+sudo mv poasta /usr/local/bin/
+```
+Replace `X.Y.Z` with the release number you wish to install. The binary can
+then be used directly from the command line.
 
 ### Conda
 
-TODO
+POASTA is packaged for bioconda. You can install it using `conda` or
+`mamba` as follows:
+
+```bash
+conda install -c conda-forge -c bioconda poasta
+```
+This will fetch a pre-built binary suitable for your environment and add it
+to your active conda environment's path.
 
 ### Building POASTA from source
 
@@ -130,6 +149,38 @@ poasta view -Ogfa existing_msa.poasta > poa_graph.gfa
 # Convert to FASTA MSA
 poasta view -Ofasta existing_msa.poasta > poa_msa.fasta
 ```
+### Inspecting POA graphs
+
+Use `poasta stats` to print statistics for a stored graph. The command
+reports fields such as `node_count`, `node_count_with_start`,
+`edge_count`, `avg_in_degree`, and `avg_out_degree`.
+
+```bash
+poasta stats graph.poasta 2> stats.log
+```
+Example output:
+
+```
+node_count: 124
+node_count_with_start: 126
+edge_count: 210
+avg_in_degree: 1.65
+avg_out_degree: 1.65
+```
+
+The `contrib/poasta_tools` directory includes plotting tools.
+Run `poasta_plot.py` to visualize dynamic programming matrices:
+
+```bash
+python contrib/poasta_tools/poasta_plot.py matrix.tsv graph.dot
+```
+
+Use `poasta_graphviz_region.py` to render a subgraph:
+
+```bash
+python contrib/poasta_tools/poasta_graphviz_region.py \
+    graph.dot chr1:1000-2000
+```
 
 ## Gap penalty configuration
 
@@ -174,8 +225,63 @@ poasta align -m ends-free sequences.fasta
 
 Note: Currently, `ends-free` and `semi-global` modes are only supported with `global` alignment.
 
+## Aligning sequences with `lasagna`
+
+`lasagna` aligns reads to an existing POA graph described in GFA format and
+emits the resulting alignments as GAF records.
+
+```bash
+lasagna align graph.gfa reads.fq.gz > alignments.gaf
+```
+
+### Arguments
+
+- `graph` – the input GFA graph (must be acyclic)
+- `sequences` – FASTA/FASTQ reads to align (gzip supported)
+- `-j`, `--num-threads` – number of worker threads
+- `-o` – output filename (stdout if omitted)
+- `-O` – output format, currently only `gaf`
+- `-m` – alignment span (`global`, `semi-global`, `ends-free`)
+- `-n` – mismatch penalty
+- `-g` – gap open penalty
+- `-e` – gap extend penalty
+
+### How it differs from `poasta`
+
+While `poasta` builds and updates partial order graphs from input sequences and
+can convert them between several formats, `lasagna` does not modify the graph.
+Instead it maps sequences onto a given GFA graph and outputs the alignments in
+GAF without producing a POASTA graph file.
+
+## Python visualization helpers
+
+The `contrib/poasta_tools` directory provides small utilities for
+inspecting alignment results. `poasta_plot.py` can plot the aligner
+state over time while `poasta_graphviz_region.py` extracts and
+visualizes subgraphs from a POA graph.
+
+```bash
+python contrib/poasta_tools/poasta_plot.py --help
+python contrib/poasta_tools/poasta_graphviz_region.py --help
+```
+
+These tools depend on `numpy`, `pandas`, `matplotlib`, `networkx`, and
+`pygraphviz`.
 
 ## Related repositories
 
 * [poa-bench](https://github.com/broadinstitute/poa-bench) - Benchmark POASTA against other POA tools
 * [spoa-rs](https://github.com/broadinstitute/spoa-rs) - Rust bindings to SPOA
+
+## Contributing
+
+Run the test suites to ensure everything works as expected.
+
+```bash
+cargo test
+pytest tests/python_tools
+```
+
+Both suites should pass. Set the `SEED` environment variable to force
+deterministic behavior. If you measure coverage, tools such as
+`cargo tarpaulin` or `pytest --cov` are recommended.

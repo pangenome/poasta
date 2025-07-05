@@ -154,3 +154,45 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aligner::alignment::{AlignedPair, Alignment};
+    use crate::graphs::poa::POAGraph;
+
+    #[test]
+    fn test_poa_graph_to_fasta_basic() {
+        let mut graph = POAGraph::<u16>::new();
+
+        let seq1 = b"ACG";
+        let weights1 = vec![1; seq1.len()];
+        graph
+            .add_alignment_with_weights("seq1", seq1, None, &weights1)
+            .unwrap();
+
+        // Nodes for sequence 1 are added sequentially after start and end nodes
+        use petgraph::prelude::NodeIndex;
+        let nodes = [NodeIndex::new(2usize), NodeIndex::new(3usize), NodeIndex::new(4usize)];
+
+        let seq2 = b"AG";
+        let weights2 = vec![1; seq2.len()];
+        let alignment: Alignment<_> = vec![
+            AlignedPair::new(Some(nodes[0]), Some(0)),
+            AlignedPair::new(Some(nodes[1]), None),
+            AlignedPair::new(Some(nodes[2]), Some(1)),
+        ];
+        graph
+            .add_alignment_with_weights("seq2", seq2, Some(&alignment), &weights2)
+            .unwrap();
+
+        let mut buf = Vec::new();
+        poa_graph_to_fasta(&graph, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], ">seq1");
+        assert_eq!(lines[1], "ACG");
+        assert_eq!(lines[2], ">seq2");
+        assert_eq!(lines[3], "A-G");
+    }
+}

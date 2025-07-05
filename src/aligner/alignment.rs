@@ -76,3 +76,49 @@ where
         query_chars.into_iter().collect::<String>(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphs::mock::{create_test_graph1, NIx};
+    use petgraph::graph::NodeIndex;
+
+    type N = NodeIndex<NIx>;
+
+    #[test]
+    fn test_aligned_pair_is_aligned() {
+        let pair = AlignedPair::<N>::new(Some(N::new(1)), Some(2));
+        assert!(pair.is_aligned());
+        assert!(!pair.is_insertion());
+        assert!(!pair.is_deletion());
+    }
+
+    #[test]
+    fn test_aligned_pair_is_insertion() {
+        let pair = AlignedPair::<N>::new(Some(N::new(1)), None);
+        assert!(pair.is_insertion());
+        assert!(!pair.is_aligned());
+        assert!(!pair.is_deletion());
+    }
+
+    #[test]
+    fn test_aligned_pair_is_deletion() {
+        let pair = AlignedPair::<N>::new(None, Some(0));
+        assert!(pair.is_deletion());
+        assert!(!pair.is_aligned());
+        assert!(!pair.is_insertion());
+    }
+
+    #[test]
+    fn test_print_alignment() {
+        let graph = create_test_graph1();
+        let seq = b"AC";
+        let aln: Alignment<N> = vec![
+            AlignedPair::new(Some(N::new(0)), Some(0)),
+            AlignedPair::new(Some(N::new(1)), None),
+            AlignedPair::new(None, Some(1)),
+        ];
+        let output = print_alignment(&graph, seq, &aln);
+        assert_eq!(output, "---\n·  \nA-C");
+    }
+}

@@ -1,34 +1,62 @@
 #!/usr/bin/env python3
-import sys
 import argparse
+import sys
+from bisect import bisect_left
 from pathlib import Path
 from typing import BinaryIO
-from bisect import bisect_left
 
 import pygraphviz
 
 
-def parse_seq_meta(seq_str: str):
-    seq_name, start_node = seq_str.rsplit(b':', maxsplit=1)
+def parse_seq_meta(seq_bytes: bytes) -> tuple[str, str]:
+    """Return sequence name and first node id.
 
-    return seq_name.decode('utf-8'), start_node.decode('ascii')
+    Args:
+        seq_bytes: Sequence info of the form ``name:start``.
+
+    Returns:
+        Tuple of sequence name and start node label.
+    """
+
+    seq_name, start_node = seq_bytes.rsplit(b":", maxsplit=1)
+
+    return seq_name.decode("utf-8"), start_node.decode("ascii")
 
 
 def parse_poasta_graphviz(file: BinaryIO):
-    seq_names = file.readline()
-    seq_names = seq_names.replace(b"# seq:\t", b"").split(b'\t')
+    """Parse GraphViz graph from POASTA DOT data.
+
+    Args:
+        file: Binary file handle pointing to a POASTA graph.
+
+    Returns:
+        Tuple of the parsed graph and sequence meta information.
+    """
+
+    seq_names_line = file.readline()
+    seq_names = seq_names_line.replace(b"# seq:\t", b"").split(b"\t")
 
     seq_meta = {}
     for i, seq in enumerate(seq_names):
         seq_name, start_node = parse_seq_meta(seq)
         seq_meta[seq_name] = (i, start_node)
 
-    dot_graph = file.read().decode('ascii')
+    dot_graph = file.read().decode("ascii")
 
     return pygraphviz.AGraph(dot_graph), seq_meta
 
 
 def contains(list_to_search: list, value) -> bool:
+    """Check if sorted list contains a value using binary search.
+
+    Args:
+        list_to_search: Sorted list to search.
+        value: Value to look for.
+
+    Returns:
+        True if value is present, else False.
+    """
+
     i = bisect_left(list_to_search, value)
 
     if i != len(list_to_search) and list_to_search[i] == value:
@@ -38,38 +66,51 @@ def contains(list_to_search: list, value) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Create visualizations for a subgraph of the POA graph.")
+    """Command line interface for subgraph visualization.
 
-    parser.add_argument(
-        'poasta_dot', type=Path,
-        help="Path to a POASTA graph in DOT format."
+    Parses arguments, extracts a region from the graph and prints the
+    subgraph in DOT format.
+    """
+
+    parser = argparse.ArgumentParser(
+        description="Create visualizations for a subgraph of the POA graph."
     )
 
     parser.add_argument(
-        'region',
-        help="Subgraph to extract and visualize. Format: seq_name:start-stop."
+        "poasta_dot", type=Path, help="Path to a POASTA graph in DOT format."
     )
 
     parser.add_argument(
-        '-p', '--pos-offset', type=int, default=1,
-        help="Base position of sequence in the graph"
+        "region", help="Subgraph to extract and visualize. Format: seq_name:start-stop."
     )
 
     parser.add_argument(
-        '-H', '--highlight', type=str, action="append", default=None,
+        "-p",
+        "--pos-offset",
+        type=int,
+        default=1,
+        help="Base position of sequence in the graph",
+    )
+
+    parser.add_argument(
+        "-H",
+        "--highlight",
+        type=str,
+        action="append",
+        default=None,
         help="Highlight the path of a specific sequence. Format: seq_name:color. "
-             "Option can be used multiple times."
+        "Option can be used multiple times.",
     )
 
     args = parser.parse_args()
 
     print("Reading graph...", file=sys.stderr)
-    with args.poasta_dot.open('rb') as ifile:
+    with args.poasta_dot.open("rb") as ifile:
         g, seq_meta = parse_poasta_graphviz(ifile)
 
     try:
-        seq_name, region = args.region.rsplit(':', maxsplit=1)
-        start, stop = region.split('-', maxsplit=1)
+        seq_name, region = args.region.rsplit(":", maxsplit=1)
+        start, stop = region.split("-", maxsplit=1)
         start = max(0, int(start) - 1)
         stop = int(stop)
 
@@ -86,9 +127,12 @@ def main():
     highlight_seq_ids = {}
     if args.highlight:
         for ref_highlight in args.highlight:
-            ref_name, color = ref_highlight.rsplit(':', maxsplit=1)
+            ref_name, color = ref_highlight.rsplit(":", maxsplit=1)
             if ref_name not in seq_meta:
-                print(f"Invalid sequence '{ref_name}', ignoring highlight.", file=sys.stderr)
+                print(
+                    f"Invalid sequence '{ref_name}', ignoring highlight.",
+                    file=sys.stderr,
+                )
                 continue
 
             highlight_seq_ids[seq_meta[ref_name][0]] = color
@@ -111,19 +155,21 @@ def main():
 
         next_node = None
         for out_edge in g.out_edges_iter(curr_node):
-            seq_ids = [int(v[1:]) for v in out_edge.attr['class'].split()]
+            seq_ids = [int(v[1:]) for v in out_edge.attr["class"].split()]
             if contains(seq_ids, seq_id):
                 next_node = out_edge[1]
 
         curr_node = next_node
         curr_pos += 1
 
-    new_subgraph = pygraphviz.AGraph(directed=True, rankdir='LR', nodesep=0.05, pad=0.025, fontname="Arial")
-    new_subgraph.node_attr['shape'] = "square"
-    new_subgraph.node_attr['style'] = "filled"
-    new_subgraph.node_attr['fillcolor'] = "#e3e3e3"
-    new_subgraph.node_attr['penwidth'] = 0
-    new_subgraph.node_attr['margin'] = 0.05
+    new_subgraph = pygraphviz.AGraph(
+        directed=True, rankdir="LR", nodesep=0.05, pad=0.025, fontname="Arial"
+    )
+    new_subgraph.node_attr["shape"] = "square"
+    new_subgraph.node_attr["style"] = "filled"
+    new_subgraph.node_attr["fillcolor"] = "#e3e3e3"
+    new_subgraph.node_attr["penwidth"] = 0
+    new_subgraph.node_attr["margin"] = 0.05
 
     for i, n in enumerate(seq_path):
         if n in aligned_nodes_subgraphs:
@@ -134,14 +180,16 @@ def main():
         else:
             new_subgraph.add_node(n, **g.get_node(n).attr)
 
-        new_subgraph.get_node(n).attr['xlabel'] = f"<<font color='black'>{start+i+1}</font>>"
+        new_subgraph.get_node(n).attr[
+            "xlabel"
+        ] = f"<<font color='black'>{start+i+1}</font>>"
 
     all_region_nodes = set(new_subgraph.nodes_iter())
     for e in g.edges_iter(all_region_nodes):
         if e[0] not in all_region_nodes or e[1] not in all_region_nodes:
             continue
 
-        seq_ids = set(int(v[1:]) for v in e.attr['class'].split())
+        seq_ids = set(int(v[1:]) for v in e.attr["class"].split())
         edge_color_list = []
         for seq_id, color in highlight_seq_ids.items():
             if seq_id in seq_ids:
@@ -152,12 +200,12 @@ def main():
             if len(seq_ids) - len(edge_color_list) > 0:
                 edge_color_list = ["black", *edge_color_list]
 
-            edge_attr['color'] = ":".join(edge_color_list)
+            edge_attr["color"] = ":".join(edge_color_list)
 
         new_subgraph.add_edge(e[0], e[1], **edge_attr)
 
     print(new_subgraph.to_string())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

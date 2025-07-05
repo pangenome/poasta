@@ -10,14 +10,13 @@ use noodles::{fasta, fastq};
 use flate2::read::MultiGzDecoder;
 use poasta::bubbles::index::BubbleIndex;
 use poasta::io::gfa::FieldValue;
-use rustc_hash::FxHashMap;
+use poasta::io::gaf::NodeSegmentResolver;
 
 use poasta::aligner::config::{AffineMinGapCost, AlignmentConfig};
 use poasta::aligner::scoring::{AlignmentType, GapAffine, Score};
 use poasta::aligner::PoastaAligner;
 use poasta::errors::PoastaError;
 use poasta::graphs::poa::{POAGraph, POANodeIndex};
-use poasta::graphs::AlignableRefGraph;
 use poasta::io::gfa::Field;
 use poasta::io::gaf::{alignment_to_gaf, GAFRecord};
 use poasta::io::graph::{load_graph_from_gfa, GraphSegments, POAGraphFromGFA};
@@ -111,9 +110,9 @@ struct SequenceRecord(String, Vec<u8>);
 
 
 fn align_sequence<Ix, C>(
-    graph: &POAGraph<Ix>, 
+    graph: &POAGraph<Ix>,
     graph_segments: &GraphSegments<Ix>,
-    node_to_segment: &FxHashMap<POANodeIndex<Ix>, (usize, usize)>,
+    resolver: &NodeSegmentResolver<Ix>,
     aligner: &mut PoastaAligner<C>,
     bubble_index: Arc<BubbleIndex<POANodeIndex<Ix>>>,
     seq_name: &str, 
@@ -125,7 +124,7 @@ where
 {
     let result = aligner.align_with_existing_bubbles::<u32, _>(graph, sequence, bubble_index);
     
-    alignment_to_gaf(graph, graph_segments, seq_name, sequence, &result.alignment, node_to_segment)
+    alignment_to_gaf(graph, graph_segments, seq_name, sequence, &result.alignment, resolver)
         .map(|mut r| {
             if let Score::Score(v) = result.score {
                 r.additional_fields.push(Field {
@@ -189,30 +188,7 @@ fn align_subcommand(args: &AlignArgs) -> Result<()> {
     // Construct bubble index
     let bubble_index = Arc::new(BubbleIndex::new(&graph));
     
-    // TODO: this is maybe a bit memory inefficient, storing segment id for every node
-    let mut node_to_segment = FxHashMap::default();
-    for (segment_ix, _) in graph_segments.names.iter().enumerate() {
-        let start_node = graph_segments.start_nodes[segment_ix];
-        let end_node = graph_segments.end_nodes[segment_ix];
-        
-        node_to_segment.insert(start_node, (segment_ix, 0));
-        
-        if start_node == end_node {
-            continue;
-        }
-        
-        let mut curr_node = start_node;
-        let mut segment_pos = 1;
-        while let Some(succ) = graph.successors(curr_node).next() {
-            node_to_segment.insert(succ, (segment_ix, segment_pos));
-            curr_node = succ;
-            segment_pos += 1;
-            
-            if curr_node == end_node {
-                break;
-            }
-        }
-    }
+    let resolver = NodeSegmentResolver::new(&graph, &graph_segments);
     
     let scoring = GapAffine::new(
         args.cost_mismatch.unwrap_or(4),
@@ -271,7 +247,7 @@ fn align_subcommand(args: &AlignArgs) -> Result<()> {
         for _ in 0..args.num_threads.unwrap_or(1) {
             let graph = &graph;
             let graph_segments = &graph_segments;
-            let node_to_segment = &node_to_segment;
+            let resolver = resolver;
             let thread_rx = rx.clone();
             let tx_out_thread = tx_out.clone();
             let bubble_index_thread = bubble_index.clone();
@@ -280,7 +256,7 @@ fn align_subcommand(args: &AlignArgs) -> Result<()> {
                 let mut aligner = PoastaAligner::new(AffineMinGapCost(scoring), AlignmentType::Global);
                 
                 while let Ok(SequenceRecord(seq_name, sequence)) = thread_rx.recv() {
-                    let result = align_sequence(graph, graph_segments, node_to_segment, &mut aligner, bubble_index_thread.clone(), &seq_name, &sequence);
+                    let result = align_sequence(graph, graph_segments, &resolver, &mut aligner, bubble_index_thread.clone(), &seq_name, &sequence);
                     
                     if let Some(r) = result {
                         tx_out_thread.send(r)?;
