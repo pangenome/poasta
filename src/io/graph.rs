@@ -371,6 +371,136 @@ where
     Ok(())
 }
 
+pub fn graph_to_gfav1<Ix>(writer: &mut impl Write, graph: &POAGraph<Ix>) -> Result<(), PoastaError>
+where
+    Ix: IndexType + DeserializeOwned,
+{
+    let mut visited = FxHashSet::default();
+    let mut queue = VecDeque::default();
+    queue.push_back(graph.start_node());
+    visited.insert(graph.start_node());
+
+    writeln!(writer, "H\tVN:Z:1.1")?;
+
+    // Compress non-branching paths into GFA segments
+    let mut node_to_segment = FxHashMap::default();
+    let mut segment_starts = FxHashMap::default();
+    let mut segment_ends = FxHashMap::default();
+    let mut segment_lengths = FxHashMap::default();
+    let mut curr_segment_id = 0;
+    while let Some(front) = queue.pop_front() {
+        if front == graph.start_node() {
+            for succ in graph.successors(front) {
+                if !visited.contains(&succ) {
+                    queue.push_back(succ);
+                    visited.insert(succ);
+                }
+            }
+        } else {
+            let mut segment = vec![graph.get_symbol(front)];
+            let mut curr_node = front;
+            let mut curr_out_degree = graph.out_degree(front);
+
+            let mut seg_pos = 0usize;
+            node_to_segment.insert(front, (curr_segment_id, seg_pos));
+            segment_starts.insert(front, curr_segment_id);
+            while curr_out_degree == 1 {
+                let next_node = graph
+                    .successors(curr_node)
+                    .next()
+                    .ok_or(PoastaError::GraphError)?;
+                let in_degree_next = graph.in_degree(next_node);
+
+                if in_degree_next == 1 && next_node != graph.end_node() {
+                    segment.push(graph.get_symbol(next_node));
+                    node_to_segment.insert(next_node, (curr_segment_id, seg_pos));
+                } else {
+                    break;
+                }
+
+                curr_node = next_node;
+                curr_out_degree = graph.out_degree(curr_node);
+                seg_pos += 1;
+            }
+
+            writeln!(
+                writer,
+                "S\t{}\t{}",
+                curr_segment_id + 1,
+                String::from_utf8_lossy(&segment)
+            )?;
+            segment_ends.insert(curr_node, curr_segment_id);
+            segment_lengths.insert(curr_segment_id, segment.len());
+            visited.insert(curr_node);
+
+            for succ in graph.successors(curr_node) {
+                if !visited.contains(&succ) && succ != graph.end_node() {
+                    visited.insert(succ);
+                    queue.push_back(succ);
+                }
+            }
+
+            curr_segment_id += 1;
+        }
+    }
+
+    // Add links between segments
+    for edge in graph.graph.edge_references() {
+        if segment_ends.contains_key(&edge.source()) && segment_starts.contains_key(&edge.target()) {
+            let src = segment_ends[&edge.source()];
+            let target = segment_starts[&edge.target()];
+            writeln!(writer, "L\t{}\t+\t{}\t+\t0M", src + 1, target + 1)?;
+        }
+    }
+
+    // Add P-lines for each individual aligned sequence (gfav1 format)
+    for (seq_id, seq) in graph.sequences.iter().enumerate() {
+        let mut curr = Some(seq.start_node());
+        let (mut prev_segment, _start_pos) = node_to_segment[&seq.start_node()];
+        let mut walk_segments = vec![prev_segment];
+        
+        while let Some(n) = curr {
+            let node_segment;
+            (node_segment, _) = node_to_segment[&n];
+
+            if node_segment != prev_segment {
+                walk_segments.push(node_segment);
+            }
+
+            curr = None;
+            for out_edge in graph.graph.edges(n) {
+                if out_edge
+                    .weight()
+                    .sequence_ids
+                    .binary_search(&seq_id)
+                    .is_ok()
+                {
+                    curr = Some(out_edge.target())
+                }
+            }
+
+            prev_segment = node_segment;
+        }
+
+        // Format P-line: P <path-name> <segment-names> <overlaps>
+        // In gfav1, overlaps are represented as '*' (meaning no overlaps)
+        let segment_names = walk_segments
+            .into_iter()
+            .map(|v| format!("{}+", v + 1))
+            .collect::<Vec<String>>()
+            .join(",");
+        
+        writeln!(
+            writer,
+            "P\t{}\t{}\t*",
+            seq.name(),
+            segment_names
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn graph_to_dot<Ix>(writer: &mut impl Write, graph: &POAGraph<Ix>) -> Result<(), PoastaError>
 where
     Ix: IndexType + DeserializeOwned,

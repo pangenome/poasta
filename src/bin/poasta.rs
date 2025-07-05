@@ -22,7 +22,7 @@ use poasta::errors::PoastaError;
 use poasta::graphs::poa::{POAGraph, POAGraphWithIx};
 use poasta::graphs::AlignableRefGraph;
 use poasta::io::fasta::poa_graph_to_fasta;
-use poasta::io::graph::{graph_to_dot, graph_to_gfa, load_graph_from_fasta_msa};
+use poasta::io::graph::{graph_to_dot, graph_to_gfa, graph_to_gfav1, load_graph_from_fasta_msa};
 use poasta::io::load_graph;
 
 trait Output: Write + IsTerminal {}
@@ -39,6 +39,9 @@ enum OutputType {
 
     /// Output the graph as GFA
     Gfa,
+
+    /// Output the graph as GFA v1 with P-lines instead of W-lines
+    Gfav1,
 
     /// Output the graph in DOT format for visualization
     Dot,
@@ -449,6 +452,12 @@ fn align_subcommand(align_args: &AlignArgs) -> Result<()> {
             POAGraphWithIx::U32(ref g) => graph_to_gfa(&mut writer, g),
             POAGraphWithIx::USIZE(ref g) => graph_to_gfa(&mut writer, g),
         }?,
+        OutputType::Gfav1 => match graph {
+            POAGraphWithIx::U8(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::U16(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::U32(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::USIZE(ref g) => graph_to_gfav1(&mut writer, g),
+        }?,
     }
 
     if let Some(debug) = debug_writer {
@@ -510,6 +519,12 @@ fn view_subcommand(view_args: &ViewArgs) -> Result<()> {
             POAGraphWithIx::U16(ref g) => graph_to_gfa(&mut writer, g),
             POAGraphWithIx::U32(ref g) => graph_to_gfa(&mut writer, g),
             POAGraphWithIx::USIZE(ref g) => graph_to_gfa(&mut writer, g),
+        }?,
+        OutputType::Gfav1 => match graph {
+            POAGraphWithIx::U8(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::U16(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::U32(ref g) => graph_to_gfav1(&mut writer, g),
+            POAGraphWithIx::USIZE(ref g) => graph_to_gfav1(&mut writer, g),
         }?,
     }
 
