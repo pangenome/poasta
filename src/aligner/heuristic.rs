@@ -136,7 +136,13 @@ impl<N, O> AstarHeuristic<N, O> for PathAwareHeuristic<N, O> {
         if paths.is_empty() {
             // Fallback: if node is not on any path, use a conservative estimate
             let remaining_query = self.seq_length.saturating_sub(aln_node.offset().as_usize());
-            return self.costs.gap_cost(aln_state, remaining_query);
+            // Map two-piece affine states to regular affine states
+            let state = match aln_state {
+                AlignState::Deletion | AlignState::Deletion2 => AlignState::Deletion,
+                AlignState::Insertion | AlignState::Insertion2 => AlignState::Insertion,
+                AlignState::Match => AlignState::Match,
+            };
+            return self.costs.gap_cost(state, remaining_query);
         }
         
         // Consider only the most relevant paths to avoid quadratic costs
@@ -152,19 +158,17 @@ impl<N, O> AstarHeuristic<N, O> for PathAwareHeuristic<N, O> {
                 let cost = if path_length_remaining > query_length_remaining {
                     // Need deletions
                     let gap_length = path_length_remaining - query_length_remaining;
-                    let state = if aln_state == AlignState::Deletion {
-                        aln_state
-                    } else {
-                        AlignState::Match // Will open new gap
+                    let state = match aln_state {
+                        AlignState::Deletion | AlignState::Deletion2 => AlignState::Deletion,
+                        _ => AlignState::Match // Will open new gap
                     };
                     self.costs.gap_cost(state, gap_length)
                 } else if query_length_remaining > path_length_remaining {
                     // Need insertions
                     let gap_length = query_length_remaining - path_length_remaining;
-                    let state = if aln_state == AlignState::Insertion {
-                        aln_state
-                    } else {
-                        AlignState::Match // Will open new gap
+                    let state = match aln_state {
+                        AlignState::Insertion | AlignState::Insertion2 => AlignState::Insertion,
+                        _ => AlignState::Match // Will open new gap
                     };
                     self.costs.gap_cost(state, gap_length)
                 } else {
